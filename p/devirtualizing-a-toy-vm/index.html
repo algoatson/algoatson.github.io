@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>devirtualizing a toy VM obfuscator — algoatson.github.io</title>
+<meta name="description" content="VM-based obfuscation looks terrifying until you realize it&#x27;s just an interpreter you haven&#x27;t reverse engineered yet. A walk through recovering the bytecode of a custom virtual machine. Educational target.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/devirtualizing-a-toy-vm/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="devirtualizing a toy VM obfuscator — algoatson.github.io">
+<meta property="og:description" content="VM-based obfuscation looks terrifying until you realize it&#x27;s just an interpreter you haven&#x27;t reverse engineered yet. A walk through recovering the bytecode of a custom virtual machine. Educational target.">
+<meta property="og:url" content="https://algoatson.github.io/p/devirtualizing-a-toy-vm/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/devirtualizing-a-toy-vm.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "devirtualizing a toy VM obfuscator", "datePublished": "2026-02-09", "dateModified": "2026-02-09", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "VM-based obfuscation looks terrifying until you realize it's just an interpreter you haven't reverse engineered yet. A walk through recovering the bytecode of a custom virtual machine. Educational target.", "url": "https://algoatson.github.io/p/devirtualizing-a-toy-vm/", "mainEntityOfPage": "https://algoatson.github.io/p/devirtualizing-a-toy-vm/", "keywords": "re, vm, obfuscation"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>devirtualizing a toy VM obfuscator</h1>
+  <div class="meta"><span>2026-02-09</span><span>4 min read</span><a class="tag" href="/tags/re/">re</a> <a class="tag" href="/tags/vm/">vm</a> <a class="tag" href="/tags/obfuscation/">obfuscation</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#recognizing-the-shape">recognizing the shape</a></li>
+<li><a href="#mapping-the-registers">mapping the registers</a></li>
+<li><a href="#recovering-the-opcode-table">recovering the opcode table</a></li>
+<li><a href="#writing-the-disassembler">writing the disassembler</a></li>
+<li><a href="#the-takeaway">the takeaway</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The first time you hit a VM-protected binary it feels like the author cheated.
+There's no real control flow — just one enormous function that reads bytes from
+an array and <code class="highlight">switch</code>es on them forever. Your decompiler gives up. Your
+breakpoints land in the same handler every time.</p>
+<p>Then it clicks: <strong>it's an interpreter.</strong> Someone wrote a tiny CPU in software and
+compiled the real logic down to bytecode for it. Reverse the CPU, and the
+bytecode is just another program waiting to be disassembled. This is the writeup
+of doing exactly that against a toy I built to teach myself the workflow.</p>
+<h2 id="recognizing-the-shape">recognizing the shape<a class="headerlink" href="#recognizing-the-shape" title="Permanent link">#</a></h2>
+<p>VM obfuscators all have the same skeleton, and once you've seen it you can't
+unsee it:</p>
+<figure class="codeblock"><figcaption><span class="fname">the dispatch loop, decompiled and cleaned up</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-dispatch-loop-decompiled-and-cleaned-up-1">1</a></span>
+<span class="normal"><a href="#the-dispatch-loop-decompiled-and-cleaned-up-2">2</a></span>
+<span class="normal"><a href="#the-dispatch-loop-decompiled-and-cleaned-up-3">3</a></span>
+<span class="normal"><a href="#the-dispatch-loop-decompiled-and-cleaned-up-4">4</a></span>
+<span class="normal"><a href="#the-dispatch-loop-decompiled-and-cleaned-up-5">5</a></span>
+<span class="normal"><a href="#the-dispatch-loop-decompiled-and-cleaned-up-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-dispatch-loop-decompiled-and-cleaned-up-1"><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">running</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="the-dispatch-loop-decompiled-and-cleaned-up-2"><span class="w">    </span><span class="kt">uint8_t</span><span class="w"> </span><span class="n">op</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">code</span><span class="p">[</span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">pc</span><span class="p">];</span><span class="w">      </span><span class="c1">// fetch</span>
+</span><span id="the-dispatch-loop-decompiled-and-cleaned-up-3"><span class="hll"><span class="w">    </span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">pc</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+</span></span><span id="the-dispatch-loop-decompiled-and-cleaned-up-4"><span class="w">    </span><span class="n">handler</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dispatch_table</span><span class="p">[</span><span class="n">op</span><span class="p">];</span><span class="w">       </span><span class="c1">// decode</span>
+</span><span id="the-dispatch-loop-decompiled-and-cleaned-up-5"><span class="w">    </span><span class="n">handler</span><span class="p">(</span><span class="n">vm</span><span class="p">);</span><span class="w">                        </span><span class="c1">// execute</span>
+</span><span id="the-dispatch-loop-decompiled-and-cleaned-up-6"><span class="hll"><span class="p">}</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Three tells, every time: a program counter that only ever indexes one buffer, a
+dispatch table or giant <code class="highlight">switch</code>, and a struct that's clearly a register file.
+Find those and you've found the machine. The "code" it runs is data sitting
+somewhere in the binary.</p>
+<h2 id="mapping-the-registers">mapping the registers<a class="headerlink" href="#mapping-the-registers" title="Permanent link">#</a></h2>
+<p>Before the opcodes mean anything, you need the VM's state layout. I rename
+fields in the disassembler as I confirm them — guesswork at first, then pinned
+down by watching the handlers use them.</p>
+<figure class="codeblock"><figcaption><span class="fname">recovered VM context struct</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#recovered-vm-context-struct-1">1</a></span>
+<span class="normal"><a href="#recovered-vm-context-struct-2">2</a></span>
+<span class="normal"><a href="#recovered-vm-context-struct-3">3</a></span>
+<span class="normal"><a href="#recovered-vm-context-struct-4">4</a></span>
+<span class="normal"><a href="#recovered-vm-context-struct-5">5</a></span>
+<span class="normal"><a href="#recovered-vm-context-struct-6">6</a></span>
+<span class="normal"><a href="#recovered-vm-context-struct-7">7</a></span>
+<span class="normal"><a href="#recovered-vm-context-struct-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="recovered-vm-context-struct-1">offset   field        evidence
+</span><span id="recovered-vm-context-struct-2">------   ----------   --------------------------------------------
+</span><span id="recovered-vm-context-struct-3">0x00     pc           incremented every dispatch iteration
+</span><span id="recovered-vm-context-struct-4">0x08     sp           moved by push/pop-looking handlers
+</span><span id="recovered-vm-context-struct-5">0x10     stack[32]    sp indexes into here
+</span><span id="recovered-vm-context-struct-6">0x90     regs[8]      handlers read/write by a 3-bit operand
+</span><span id="recovered-vm-context-struct-7">0xB0     code*        the fetch reads code[pc]
+</span><span id="recovered-vm-context-struct-8">0xB8     running      cleared by exactly one handler (that&#39;s HALT)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The handler that clears <code class="highlight">running</code> is your <code class="highlight">HALT</code>. The handlers that move <code class="highlight">sp</code>
+are your stack ops. You're not guessing anymore — you're reading.</p>
+<h2 id="recovering-the-opcode-table">recovering the opcode table<a class="headerlink" href="#recovering-the-opcode-table" title="Permanent link">#</a></h2>
+<p>Now the grind: open each handler, figure out what it does, write it down. Most
+are two or three instructions. I keep a table as I go.</p>
+<table>
+<thead>
+<tr>
+<th>opcode</th>
+<th>handler does</th>
+<th>I call it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="highlight">0x01</code></td>
+<td><code class="highlight">push imm8</code></td>
+<td><code class="highlight">PUSH</code></td>
+</tr>
+<tr>
+<td><code class="highlight">0x04</code></td>
+<td>pop b, pop a, push a+b</td>
+<td><code class="highlight">ADD</code></td>
+</tr>
+<tr>
+<td><code class="highlight">0x05</code></td>
+<td>pop b, pop a, push a^b</td>
+<td><code class="highlight">XOR</code></td>
+</tr>
+<tr>
+<td><code class="highlight">0x0A</code></td>
+<td>pop val, store to <code class="highlight">regs[operand]</code></td>
+<td><code class="highlight">STORE</code></td>
+</tr>
+<tr>
+<td><code class="highlight">0x0B</code></td>
+<td>load <code class="highlight">regs[operand]</code>, push</td>
+<td><code class="highlight">LOAD</code></td>
+</tr>
+<tr>
+<td><code class="highlight">0x10</code></td>
+<td>pop cond, pop target, jump if cond</td>
+<td><code class="highlight">JNZ</code></td>
+</tr>
+<tr>
+<td><code class="highlight">0xFF</code></td>
+<td>clear <code class="highlight">running</code></td>
+<td><code class="highlight">HALT</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">the operand encoding is its own little puzzle</p>
+<p>Some handlers read extra bytes after the opcode (immediates, register
+indices); some pack a register number into the low bits of the opcode
+itself. Get this wrong and your disassembly desyncs one byte and turns to
+garbage three instructions later. When output suddenly goes nonsense,
+suspect your instruction <em>lengths</em> before you suspect your <em>semantics</em>.</p>
+</div>
+<h2 id="writing-the-disassembler">writing the disassembler<a class="headerlink" href="#writing-the-disassembler" title="Permanent link">#</a></h2>
+<p>Once the table is solid, the bytecode disassembler is fifty lines of Python. The
+point isn't elegance — it's turning an opaque blob into something you can read.</p>
+<figure class="codeblock"><figcaption><span class="fname">devirt.py — the core loop</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#devirtpy-the-core-loop-1"> 1</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-2"> 2</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-3"> 3</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-4"> 4</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-5"> 5</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-6"> 6</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-7"> 7</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-8"> 8</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-9"> 9</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-10">10</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-11">11</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-12">12</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-13">13</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-14">14</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-15">15</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-16">16</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-17">17</a></span>
+<span class="normal"><a href="#devirtpy-the-core-loop-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="devirtpy-the-core-loop-1"><span class="n">OPS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="devirtpy-the-core-loop-2">    <span class="mh">0x01</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;PUSH&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>   <span class="c1"># mnemonic, immediate byte count</span>
+</span><span id="devirtpy-the-core-loop-3">    <span class="mh">0x04</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;ADD&quot;</span><span class="p">,</span>  <span class="mi">0</span><span class="p">),</span>
+</span><span id="devirtpy-the-core-loop-4">    <span class="mh">0x05</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;XOR&quot;</span><span class="p">,</span>  <span class="mi">0</span><span class="p">),</span>
+</span><span id="devirtpy-the-core-loop-5">    <span class="mh">0x0A</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;STORE&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+</span><span id="devirtpy-the-core-loop-6">    <span class="mh">0x0B</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;LOAD&quot;</span><span class="p">,</span>  <span class="mi">1</span><span class="p">),</span>
+</span><span id="devirtpy-the-core-loop-7">    <span class="mh">0x10</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;JNZ&quot;</span><span class="p">,</span>  <span class="mi">0</span><span class="p">),</span>
+</span><span id="devirtpy-the-core-loop-8">    <span class="mh">0xFF</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;HALT&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
+</span><span id="devirtpy-the-core-loop-9"><span class="p">}</span>
+</span><span id="devirtpy-the-core-loop-10">
+</span><span id="devirtpy-the-core-loop-11"><span class="hll"><span class="k">def</span><span class="w"> </span><span class="nf">disasm</span><span class="p">(</span><span class="n">code</span><span class="p">):</span>
+</span></span><span id="devirtpy-the-core-loop-12"><span class="hll">    <span class="n">pc</span> <span class="o">=</span> <span class="mi">0</span>
+</span></span><span id="devirtpy-the-core-loop-13">    <span class="k">while</span> <span class="n">pc</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">code</span><span class="p">):</span>
+</span><span id="devirtpy-the-core-loop-14">        <span class="n">op</span> <span class="o">=</span> <span class="n">code</span><span class="p">[</span><span class="n">pc</span><span class="p">];</span> <span class="n">pc</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="devirtpy-the-core-loop-15">        <span class="n">name</span><span class="p">,</span> <span class="n">imm</span> <span class="o">=</span> <span class="n">OPS</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">op</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;DB&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+</span><span id="devirtpy-the-core-loop-16">        <span class="n">operand</span> <span class="o">=</span> <span class="n">code</span><span class="p">[</span><span class="n">pc</span><span class="p">:</span><span class="n">pc</span> <span class="o">+</span> <span class="n">imm</span><span class="p">];</span> <span class="n">pc</span> <span class="o">+=</span> <span class="n">imm</span>
+</span><span id="devirtpy-the-core-loop-17">        <span class="n">arg</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot; </span><span class="si">{</span><span class="n">operand</span><span class="o">.</span><span class="n">hex</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">imm</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
+</span><span id="devirtpy-the-core-loop-18">        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">pc</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">imm</span><span class="si">:</span><span class="s2">04x</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">name</span><span class="si">}{</span><span class="n">arg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Run it over the <code class="highlight">code</code> buffer you found at <code class="highlight">0xB0</code> and the obfuscation
+evaporates. What was one unreadable interpreter loop becomes a linear listing of
+a stack machine doing — in my toy — a rolling <code class="highlight">XOR</code> check against an embedded
+key. The "protection" was a layer of indirection, and you just removed it.</p>
+<h2 id="the-takeaway">the takeaway<a class="headerlink" href="#the-takeaway" title="Permanent link">#</a></h2>
+<p>VM obfuscation trades <em>one hard problem</em> (reading native code) for <em>two easier
+ones</em> (reverse the interpreter, then disassemble the bytecode). It looks scarier
+than packing or anti-debug, but it's more mechanical: there's a finite set of
+handlers, each one is small, and once you've named them all the program has
+nowhere left to hide.<sup id="fnref:real"><a class="footnote-ref" href="#fn:real">1</a></sup></p>
+<p>Build your own VM obfuscator before you fight someone else's. Twenty handlers
+and an afternoon, and the genre stops being scary forever.</p>
+<div class="footnote">
+<hr>
+<ol>
+<li id="fn:real">
+<p>Commercial protectors (VMProtect, Themida) make every step here
+harder — handler obfuscation, duplicated/virtualized handlers, mutated
+bytecode between runs. The <em>workflow</em> is identical; you just spend days on
+each phase instead of minutes. Build the toy first so the workflow is muscle
+memory before the target is fighting back.&#160;<a class="footnote-backref" href="#fnref:real" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/rizin-radare2-in-anger/"><span class="row__date">2026-06-02</span><span class="row__tag">re</span><span class="row__title">rizin and radare2 in anger</span><span class="row__min">4 min</span></a><a class="row" href="/p/first-five-minutes-unknown-binary/"><span class="row__date">2026-04-22</span><span class="row__tag">re</span><span class="row__title">the first five minutes with an unknown binary</span><span class="row__min">3 min</span></a><a class="row" href="/p/anti-debug-bingo/"><span class="row__date">2026-04-09</span><span class="row__tag">re</span><span class="row__title">anti-debug bingo: five checks and how they fall</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/slab-uaf-modprobe/"><span class="lbl">&#8249; newer</span>a slab use-after-free, from ioctl to root</a><a class="next" href="/p/ret2libc-warmup/"><span class="lbl">older &#8250;</span>ret2libc on a warm-up: stack smash to shell</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

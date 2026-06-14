@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>rizin and radare2 in anger — algoatson.github.io</title>
+<meta name="description" content="The terminal reverse-engineering workflow — open, analyse, navigate, search, patch, and debug a binary without ever leaving the prompt. The commands I actually use, plus where rizin and radare2 diverge.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/rizin-radare2-in-anger/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="rizin and radare2 in anger — algoatson.github.io">
+<meta property="og:description" content="The terminal reverse-engineering workflow — open, analyse, navigate, search, patch, and debug a binary without ever leaving the prompt. The commands I actually use, plus where rizin and radare2 diverge.">
+<meta property="og:url" content="https://algoatson.github.io/p/rizin-radare2-in-anger/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/rizin-radare2-in-anger.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "rizin and radare2 in anger", "datePublished": "2026-06-02", "dateModified": "2026-06-02", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The terminal reverse-engineering workflow — open, analyse, navigate, search, patch, and debug a binary without ever leaving the prompt. The commands I actually use, plus where rizin and radare2 diverge.", "url": "https://algoatson.github.io/p/rizin-radare2-in-anger/", "mainEntityOfPage": "https://algoatson.github.io/p/rizin-radare2-in-anger/", "keywords": "re, tooling"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>rizin and radare2 in anger</h1>
+  <div class="meta"><span>2026-06-02</span><span>4 min read</span><a class="tag" href="/tags/re/">re</a> <a class="tag" href="/tags/tooling/">tooling</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#open-and-analyse">open and analyse</a></li>
+<li><a href="#info-before-instructions">info before instructions</a></li>
+<li><a href="#navigate-and-disassemble">navigate and disassemble</a></li>
+<li><a href="#xrefs-the-question-you-ask-most">xrefs — the question you ask most</a></li>
+<li><a href="#search-strings-bytes-and-gadgets">search — strings, bytes, and gadgets</a></li>
+<li><a href="#decompile-in-place">decompile in place</a></li>
+<li><a href="#patch-without-a-hex-editor">patch without a hex editor</a></li>
+<li><a href="#debug-from-the-same-prompt">debug from the same prompt</a></li>
+<li><a href="#make-it-yours">make it yours</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Ghidra is where I read one gnarly function; rizin/radare2 is where I <em>live</em> — it's
+faster to orient, scriptable, and it disassembles, patches, and debugs from one
+prompt. The command grammar is verb-then-noun and relentlessly chainable, which
+is intimidating for a day and muscle memory after that. Here's the working set.</p>
+<p>The two tools share a command language almost byte for byte. I'll write <code class="highlight">r2</code>;
+<code class="highlight">rizin</code> is the same session with renamed binaries — see the note at the end.</p>
+<h2 id="open-and-analyse">open and analyse<a class="headerlink" href="#open-and-analyse" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="gp">$ </span>r2<span class="w"> </span>-A<span class="w"> </span>./chal<span class="w">        </span><span class="c1"># open and run full analysis up front</span>
+</span><span id="code-2"><span class="gp">$ </span>r2<span class="w"> </span>-d<span class="w"> </span>./chal<span class="w">        </span><span class="c1"># open in debug mode (live process)</span>
+</span><span id="code-3"><span class="gp">$ </span>r2<span class="w"> </span>-w<span class="w"> </span>./chal<span class="w">        </span><span class="c1"># open writable, for patching</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Inside, if you didn't pass <code class="highlight">-A</code>, analyse with <code class="highlight">aaa</code> (or <code class="highlight">aaaa</code> for the deep,
+slow pass). Analysis is what populates function names, xrefs, and strings.</p>
+<h2 id="info-before-instructions">info before instructions<a class="headerlink" href="#info-before-instructions" title="Permanent link">#</a></h2>
+<p>Read the binary's metadata first — <code class="highlight">r2</code> even gives you checksec for free:</p>
+<table>
+<thead>
+<tr>
+<th>command</th>
+<th>what it lists</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="highlight">iI</code></td>
+<td>binary info <strong>incl. nx / canary / pic / relro</strong> (checksec)</td>
+</tr>
+<tr>
+<td><code class="highlight">ii</code></td>
+<td>imports (the libc surface)</td>
+</tr>
+<tr>
+<td><code class="highlight">is</code></td>
+<td>symbols</td>
+</tr>
+<tr>
+<td><code class="highlight">iz</code> / <code class="highlight">izz</code></td>
+<td>strings in data sections / in the whole file</td>
+</tr>
+<tr>
+<td><code class="highlight">iS</code></td>
+<td>sections</td>
+</tr>
+<tr>
+<td><code class="highlight">ie</code></td>
+<td>entrypoints</td>
+</tr>
+</tbody>
+</table>
+<h2 id="navigate-and-disassemble">navigate and disassemble<a class="headerlink" href="#navigate-and-disassemble" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-2-1">1</a></span>
+<span class="normal"><a href="#code-2-2">2</a></span>
+<span class="normal"><a href="#code-2-3">3</a></span>
+<span class="normal"><a href="#code-2-4">4</a></span>
+<span class="normal"><a href="#code-2-5">5</a></span>
+<span class="normal"><a href="#code-2-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-2-1">afl                 # list every function analysis found
+</span><span id="code-2-2">afl~main            # ...grep for one (~ is r2&#39;s internal grep)
+</span><span id="code-2-3">s main              # seek to a symbol (or s sym.main, s 0x401234)
+</span><span id="code-2-4">pdf                 # disassemble the function at the current seek
+</span><span id="code-2-5">pd 20               # disassemble 20 instructions from here
+</span><span id="code-2-6">pdf @ sym.check     # disassemble check() without moving the seek (@ = &quot;at&quot;)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">~</code> greps, <code class="highlight">@</code> runs a command at a temporary address, and they compose:
+<code class="highlight">pdf @ main ~call</code> lists every call inside <code class="highlight">main</code>. That composition is the whole
+reason to use r2 over clicking.</p>
+<p>For the visual mode that feels like a <abbr title="Text User Interface">TUI</abbr>:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-3-1">1</a></span>
+<span class="normal"><a href="#code-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-3-1">V       # visual disassembly  (p / P cycle views, hjkl move, : for a command, q exits)
+</span><span id="code-3-2">VV      # visual graph mode    (the control-flow graph; great for nested branches)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="xrefs-the-question-you-ask-most">xrefs — the question you ask most<a class="headerlink" href="#xrefs-the-question-you-ask-most" title="Permanent link">#</a></h2>
+<p>"Who calls this, and what does this touch?"</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-4-1">1</a></span>
+<span class="normal"><a href="#code-4-2">2</a></span>
+<span class="normal"><a href="#code-4-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-4-1">axt sym.imp.system     # cross-references TO system  -&gt; where it&#39;s called
+</span><span id="code-4-2">axt @ str.bin_sh       # who references the &quot;/bin/sh&quot; string
+</span><span id="code-4-3">axf @ main             # references FROM main         -&gt; what main calls/reads
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">axt sym.imp.system</code> is often the fastest path to the bug: find the dangerous
+call, then read backwards to what feeds it.</p>
+<h2 id="search-strings-bytes-and-gadgets">search — strings, bytes, and gadgets<a class="headerlink" href="#search-strings-bytes-and-gadgets" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-5-1">1</a></span>
+<span class="normal"><a href="#code-5-2">2</a></span>
+<span class="normal"><a href="#code-5-3">3</a></span>
+<span class="normal"><a href="#code-5-4">4</a></span>
+<span class="normal"><a href="#code-5-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-5-1">/ /bin/sh          # search for a string
+</span><span id="code-5-2">/x 4831c0          # search for a byte pattern (hex)
+</span><span id="code-5-3">/a jmp rax         # search for an assembled instruction
+</span><span id="code-5-4">/R pop rdi         # ROP: gadget search ending in ret
+</span><span id="code-5-5">/R/ pop r..        # ...as a regex
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">/R pop rdi</code> makes r2 a serviceable gadget finder when you don't want to leave for
+ROPgadget.</p>
+<h2 id="decompile-in-place">decompile in place<a class="headerlink" href="#decompile-in-place" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-6-1">1</a></span>
+<span class="normal"><a href="#code-6-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-6-1">pdc                # r2&#39;s built-in pseudo-C (rough but instant)
+</span><span id="code-6-2">pdg                # Ghidra-quality decompile, via the r2ghidra / rz-ghidra plugin
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">pdg</code> needs the plugin (<code class="highlight">r2pm -ci r2ghidra</code>, or rizin's <code class="highlight">rz-ghidra</code>), but it's the
+Ghidra decompiler in your terminal — worth the install.</p>
+<h2 id="patch-without-a-hex-editor">patch without a hex editor<a class="headerlink" href="#patch-without-a-hex-editor" title="Permanent link">#</a></h2>
+<p>Open writable (<code class="highlight">-w</code>, or <code class="highlight">oo+</code> to reopen rw mid-session), then write hex or assembly
+straight over an instruction:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-7-1">1</a></span>
+<span class="normal"><a href="#code-7-2">2</a></span>
+<span class="normal"><a href="#code-7-3">3</a></span>
+<span class="normal"><a href="#code-7-4">4</a></span>
+<span class="normal"><a href="#code-7-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-7-1">oo+                # reopen current file read-write
+</span><span id="code-7-2">s 0x401185         # seek to the branch you want gone
+</span><span id="code-7-3">wao nop            # assemble-over: turn this instruction into nop(s)
+</span><span id="code-7-4">wx 9090            # or write raw bytes
+</span><span id="code-7-5">wa jmp 0x4011b0    # or write a new instruction (wa = &quot;write assembly&quot;)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>This is how you NOP a license check or flip a <code class="highlight">jz</code> to a <code class="highlight">jmp</code> and save the binary
+in one place.</p>
+<h2 id="debug-from-the-same-prompt">debug from the same prompt<a class="headerlink" href="#debug-from-the-same-prompt" title="Permanent link">#</a></h2>
+<p><code class="highlight">r2 -d ./chal</code> drops you in with the process live; the debug commands mirror the
+static ones with a <code class="highlight">d</code> prefix:</p>
+<table>
+<thead>
+<tr>
+<th>command</th>
+<th>does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="highlight">db 0x401234</code></td>
+<td>set a breakpoint</td>
+</tr>
+<tr>
+<td><code class="highlight">dc</code></td>
+<td>continue</td>
+</tr>
+<tr>
+<td><code class="highlight">ds</code> / <code class="highlight">dso</code></td>
+<td>step / step-over</td>
+</tr>
+<tr>
+<td><code class="highlight">dr</code></td>
+<td>show registers (<code class="highlight">dr rax=0</code> sets one)</td>
+</tr>
+<tr>
+<td><code class="highlight">dm</code> / <code class="highlight">dmm</code></td>
+<td>memory maps / loaded modules</td>
+</tr>
+<tr>
+<td><code class="highlight">dbt</code></td>
+<td>backtrace</td>
+</tr>
+</tbody>
+</table>
+<h2 id="make-it-yours">make it yours<a class="headerlink" href="#make-it-yours" title="Permanent link">#</a></h2>
+<p>Drop your defaults in <code class="highlight">~/.radare2rc</code> (or <code class="highlight">~/.rizinrc</code>) so every session starts right:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-8-1">1</a></span>
+<span class="normal"><a href="#code-8-2">2</a></span>
+<span class="normal"><a href="#code-8-3">3</a></span>
+<span class="normal"><a href="#code-8-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-8-1">e asm.syntax = intel     # AT&amp;T is the default; fix that
+</span><span id="code-8-2">e scr.color = 3          # full colour
+</span><span id="code-8-3">e asm.bytes = true       # show opcode bytes next to disasm
+</span><span id="code-8-4">e pager = less
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<div class="admonition tip">
+<p class="admonition-title">the only two help characters you need</p>
+<p>Append <code class="highlight">?</code> to any command prefix to list its subcommands: <code class="highlight">i?</code>, <code class="highlight">p?</code>, <code class="highlight">d?</code>,
+<code class="highlight">/?</code>. Append <code class="highlight">??</code> for the long form. You navigate the entire command tree by
+appending question marks — you don't memorise it, you discover it.</p>
+</div>
+<details class="note">
+<summary>rizin vs radare2 — which one</summary>
+<p>rizin is a 2020 fork of radare2, aimed at a cleaner, stabler API and a more
+coordinated release process; the <strong>interactive command set is nearly
+identical</strong>, so everything above works in both. The differences you'll touch:</p>
+<ul>
+<li>tools are renamed — <code class="highlight">rabin2</code> → <code class="highlight">rz-bin</code>, <code class="highlight">radare2</code> → <code class="highlight">rizin</code>, <code class="highlight">r2pm</code> → <code class="highlight">rz-pm</code>.</li>
+<li>the Ghidra decompiler is <strong>rz-ghidra</strong> (built in to the rizin ecosystem) vs
+  <strong>r2ghidra</strong> (a radare2 plugin).</li>
+<li><strong>Cutter</strong>, the GUI, is built on rizin now — so learning rizin commands pays
+  off in the GUI too.</li>
+</ul>
+<p>Pick one and commit; the knowledge transfers either direction. I drifted to
+rizin for the saner plugin manager and never looked back.</p>
+</details></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/first-five-minutes-unknown-binary/"><span class="row__date">2026-04-22</span><span class="row__tag">re</span><span class="row__title">the first five minutes with an unknown binary</span><span class="row__min">3 min</span></a><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/the-rendering-reference/"><span class="lbl">&#8249; newer</span>the rendering reference</a><a class="next" href="/p/pwntools-cookbook/"><span class="lbl">older &#8250;</span>a pwntools cookbook</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

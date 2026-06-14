@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the first five minutes with an unknown binary — algoatson.github.io</title>
+<meta name="description" content="A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/first-five-minutes-unknown-binary/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the first five minutes with an unknown binary — algoatson.github.io">
+<meta property="og:description" content="A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.">
+<meta property="og:url" content="https://algoatson.github.io/p/first-five-minutes-unknown-binary/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/first-five-minutes-unknown-binary.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the first five minutes with an unknown binary", "datePublished": "2026-04-22", "dateModified": "2026-04-22", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.", "url": "https://algoatson.github.io/p/first-five-minutes-unknown-binary/", "mainEntityOfPage": "https://algoatson.github.io/p/first-five-minutes-unknown-binary/", "keywords": "re, tooling, linux"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the first five minutes with an unknown binary</h1>
+  <div class="meta"><span>2026-04-22</span><span>3 min read</span><a class="tag" href="/tags/re/">re</a> <a class="tag" href="/tags/tooling/">tooling</a> <a class="tag" href="/tags/linux/">linux</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#1-identify">1 · identify</a></li>
+<li><a href="#2-enumerate-the-elf">2 · enumerate the ELF</a></li>
+<li><a href="#3-watch-it-run">3 · watch it run</a></li>
+<li><a href="#4-set-up-the-libc-then-open-the-disassembler">4 · set up the libc, then open the disassembler</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Opening Ghidra first is a beginner tell. Five minutes of cheap static and dynamic
+triage tells you what <em>kind</em> of problem you have, and half the time it tells you
+the answer outright. Here's the order I run things, and why.</p>
+<h2 id="1-identify">1 · identify<a class="headerlink" href="#1-identify" title="Permanent link">#</a></h2>
+<p>What is this file, and what was it built to assume?</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1"> 1</a></span>
+<span class="normal"><a href="#code-2"> 2</a></span>
+<span class="normal"><a href="#code-3"> 3</a></span>
+<span class="normal"><a href="#code-4"> 4</a></span>
+<span class="normal"><a href="#code-5"> 5</a></span>
+<span class="normal"><a href="#code-6"> 6</a></span>
+<span class="normal"><a href="#code-7"> 7</a></span>
+<span class="normal"><a href="#code-8"> 8</a></span>
+<span class="normal"><a href="#code-9"> 9</a></span>
+<span class="normal"><a href="#code-10">10</a></span>
+<span class="normal"><a href="#code-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="gp">$ </span>file<span class="w"> </span>./chal
+</span><span id="code-2"><span class="go">./chal: ELF 64-bit LSB executable, x86-64, dynamically linked,</span>
+</span><span id="code-3"><span class="go">        interpreter /lib64/ld-linux-x86-64.so.2, BuildID[...], not stripped</span>
+</span><span id="code-4">
+</span><span id="code-5"><span class="gp">$ </span>checksec<span class="w"> </span>--file<span class="o">=</span>./chal<span class="w">          </span><span class="c1"># pwntools ships this; so does the checksec project</span>
+</span><span id="code-6"><span class="go">[*] &#39;/.../chal&#39;</span>
+</span><span id="code-7"><span class="go">    Arch:     amd64-64-little</span>
+</span><span id="code-8"><span class="go">    RELRO:    Partial RELRO</span>
+</span><span id="code-9"><span class="go">    Stack:    No canary found</span>
+</span><span id="code-10"><span class="go">    NX:       NX enabled</span>
+</span><span id="code-11"><span class="go">    PIE:      No PIE (0x400000)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">file</code> tells you bitness, dynamic vs static, stripped vs not, and the requested
+interpreter. <code class="highlight">checksec</code> tells you the mitigations — and therefore the route.
+<em>No PIE + no canary</em> in that output means a fixed-address stack overflow; you
+basically have the genre already.</p>
+<h2 id="2-enumerate-the-elf">2 · enumerate the <abbr title="Executable and Linkable Format">ELF</abbr><a class="headerlink" href="#2-enumerate-the-elf" title="Permanent link">#</a></h2>
+<p>Read the binary's own table of contents before reading its code.</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-2-1">1</a></span>
+<span class="normal"><a href="#code-2-2">2</a></span>
+<span class="normal"><a href="#code-2-3">3</a></span>
+<span class="normal"><a href="#code-2-4">4</a></span>
+<span class="normal"><a href="#code-2-5">5</a></span>
+<span class="normal"><a href="#code-2-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-2-1"><span class="gp">$ </span>readelf<span class="w"> </span>-h<span class="w"> </span>./chal<span class="w">      </span><span class="c1"># header: entrypoint, type (EXEC vs DYN=PIE)</span>
+</span><span id="code-2-2"><span class="gp">$ </span>readelf<span class="w"> </span>-d<span class="w"> </span>./chal<span class="w">      </span><span class="c1"># dynamic section: NEEDED libs, RELRO, RUNPATH</span>
+</span><span id="code-2-3"><span class="gp">$ </span>readelf<span class="w"> </span>-l<span class="w"> </span>./chal<span class="w">      </span><span class="c1"># program headers / segments + which sections map where</span>
+</span><span id="code-2-4"><span class="gp">$ </span>nm<span class="w"> </span>-C<span class="w"> </span>./chal<span class="w">           </span><span class="c1"># symbols, C++ names demangled (empty if stripped)</span>
+</span><span id="code-2-5"><span class="gp">$ </span>objdump<span class="w"> </span>-d<span class="w"> </span>-M<span class="w"> </span>intel<span class="w"> </span>./chal<span class="w"> </span><span class="p">|</span><span class="w"> </span>less<span class="w">   </span><span class="c1"># full disassembly, Intel syntax</span>
+</span><span id="code-2-6"><span class="gp">$ </span>objdump<span class="w"> </span>-R<span class="w"> </span>./chal<span class="w">      </span><span class="c1"># relocations — the live GOT entries</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<div class="admonition tip">
+<p class="admonition-title">readelf over ldd</p>
+<p><code class="highlight">ldd ./chal</code> actually <em>runs</em> the loader against the binary; on a hostile target
+that's an execution primitive you didn't mean to hand over. <code class="highlight">readelf -d</code> reads
+the <code class="highlight">NEEDED</code> entries statically and tells you the same thing safely.</p>
+</div>
+<p>Then the strings — fast, and shockingly often decisive:</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-3-1">1</a></span>
+<span class="normal"><a href="#code-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-3-1"><span class="gp">$ </span>strings<span class="w"> </span>-n<span class="w"> </span><span class="m">8</span><span class="w"> </span>./chal<span class="w"> </span><span class="p">|</span><span class="w"> </span>less<span class="w">        </span><span class="c1"># printable runs &gt;= 8 chars</span>
+</span><span id="code-3-2"><span class="gp">$ </span>strings<span class="w"> </span>-t<span class="w"> </span>x<span class="w"> </span>./chal<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>flag<span class="w"> </span><span class="c1"># with file offsets, hunting a keyword</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>A format string, a <code class="highlight">/bin/sh</code>, a hard-coded password, a <code class="highlight">system</code> call — strings
+finds all of them before you've read a single instruction.</p>
+<table>
+<thead>
+<tr>
+<th>tool</th>
+<th>one-line job</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="highlight">file</code></td>
+<td>bitness · linkage · stripped? · interpreter</td>
+</tr>
+<tr>
+<td><code class="highlight">checksec</code></td>
+<td>NX · PIE · RELRO · canary → the route</td>
+</tr>
+<tr>
+<td><code class="highlight">readelf -d</code></td>
+<td>shared-lib deps, RELRO, RUNPATH</td>
+</tr>
+<tr>
+<td><code class="highlight">nm -C</code> / <code class="highlight">nm -D</code></td>
+<td>static / dynamic symbols</td>
+</tr>
+<tr>
+<td><code class="highlight">strings -n 8</code></td>
+<td>hard-coded secrets, format strings, command strings</td>
+</tr>
+<tr>
+<td><code class="highlight">rabin2 -zI ./chal</code></td>
+<td>rizin's combined info + strings, if you prefer it</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-watch-it-run">3 · watch it run<a class="headerlink" href="#3-watch-it-run" title="Permanent link">#</a></h2>
+<p>Static lies by omission; the live process doesn't. Trace the calls it makes:</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-4-1">1</a></span>
+<span class="normal"><a href="#code-4-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-4-1"><span class="gp">$ </span>ltrace<span class="w"> </span>./chal<span class="w">          </span><span class="c1"># library calls: strcmp(input, &quot;s3cret&quot;), system(...)</span>
+</span><span id="code-4-2"><span class="gp">$ </span>strace<span class="w"> </span>./chal<span class="w">          </span><span class="c1"># raw syscalls: read/write/open/execve, and the fds</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">ltrace</code> is the cheat code on CrackMe-style binaries — it shows the <code class="highlight">strcmp</code>
+against the password in plaintext. <code class="highlight">strace</code> shows the I/O shape: which fds it
+reads, whether it <code class="highlight">open</code>s a flag file, whether it <code class="highlight">execve</code>s anything.</p>
+<p>And if it sandboxes itself, find out <em>before</em> you write shellcode:</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-5-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-5-1"><span class="gp">$ </span>seccomp-tools<span class="w"> </span>dump<span class="w"> </span>./chal<span class="w">   </span><span class="c1"># prints the BPF filter: which syscalls survive</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>If <code class="highlight">execve</code> is blocked but <code class="highlight">open</code>/<code class="highlight">read</code>/<code class="highlight">write</code> aren't, you already know the
+exploit ends in an <code class="highlight">open</code>-<code class="highlight">read</code>-<code class="highlight">write</code> ROP chain, not a shell.</p>
+<h2 id="4-set-up-the-libc-then-open-the-disassembler">4 · set up the libc, then open the disassembler<a class="headerlink" href="#4-set-up-the-libc-then-open-the-disassembler" title="Permanent link">#</a></h2>
+<p>For a remote pwn you want the <em>exact</em> libc locally so offsets match. <code class="highlight">pwninit</code>
+automates the patchelf dance:</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-6-1">1</a></span>
+<span class="normal"><a href="#code-6-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-6-1"><span class="gp">$ </span>pwninit<span class="w">                       </span><span class="c1"># finds ./chal + ./libc.so.6, patches the interp + rpath</span>
+</span><span id="code-6-2"><span class="gp">$ </span>one_gadget<span class="w"> </span>./libc.so.6<span class="w">        </span><span class="c1"># magic execve(&quot;/bin/sh&quot;) gadgets + their constraints</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Now — and only now — Ghidra or rizin, because you walk in already knowing the
+bitness, the mitigations, the imported functions, the strings, the syscall
+surface, and the libc. The decompiler is for the one function that matters, not
+for orientation.</p>
+<details class="note">
+<summary>the whole thing as a copy-paste block</summary>
+<p><figure class="codeblock"><figcaption><span class="lang">bash</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-7-1">1</a></span>
+<span class="normal"><a href="#code-7-2">2</a></span>
+<span class="normal"><a href="#code-7-3">3</a></span>
+<span class="normal"><a href="#code-7-4">4</a></span>
+<span class="normal"><a href="#code-7-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-7-1"><span class="nv">f</span><span class="o">=</span>./chal
+</span><span id="code-7-2">file<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="p">;</span><span class="w"> </span>echo<span class="p">;</span><span class="w"> </span>checksec<span class="w"> </span>--file<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="p">;</span><span class="w"> </span><span class="nb">echo</span>
+</span><span id="code-7-3">readelf<span class="w"> </span>-d<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="p">;</span><span class="w"> </span>nm<span class="w"> </span>-C<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
+</span><span id="code-7-4">strings<span class="w"> </span>-n<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-iE<span class="w"> </span><span class="s1">&#39;flag|/bin/sh|%s|%n|passwd|system&#39;</span><span class="w"> </span>
+</span><span id="code-7-5">seccomp-tools<span class="w"> </span>dump<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$f</span><span class="s2">&quot;</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null
+</span></code></pre></div></td></tr></table></div>
+</figure>
+Five minutes, no GUI, and you know the shape of the challenge.</p>
+</details></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/rizin-radare2-in-anger/"><span class="row__date">2026-06-02</span><span class="row__tag">re</span><span class="row__title">rizin and radare2 in anger</span><span class="row__min">4 min</span></a><a class="row" href="/p/anti-debug-bingo/"><span class="row__date">2026-04-09</span><span class="row__tag">re</span><span class="row__title">anti-debug bingo: five checks and how they fall</span><span class="row__min">4 min</span></a><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/pwndbg-muscle-memory/"><span class="lbl">&#8249; newer</span>pwndbg muscle memory</a><a class="next" href="/p/anti-debug-bingo/"><span class="lbl">older &#8250;</span>anti-debug bingo: five checks and how they fall</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

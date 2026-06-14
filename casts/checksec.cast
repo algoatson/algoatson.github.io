@@ -1,0 +1,11 @@
+{"version": 2, "width": 74, "height": 11, "timestamp": 0, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.4, "o", "$ "]
+[0.9, "o", "checksec --file=./challenge\r\n"]
+[1.4, "o", "[*] '/ctf/challenge'\r\n"]
+[1.7, "o", "    Arch:     amd64-64-little\r\n"]
+[2.0, "o", "    RELRO:    Full RELRO\r\n"]
+[2.3, "o", "    Stack:    No canary found\r\n"]
+[2.6, "o", "    NX:       NX enabled\r\n"]
+[2.9, "o", "    PIE:      PIE enabled\r\n"]
+[3.4, "o", "$ "]
+[4.4, "o", ""]

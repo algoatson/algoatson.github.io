@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the rendering reference — algoatson.github.io</title>
+<meta name="description" content="every block this site knows how to render, in one scroll — listings, the checksec panel, admonitions, spoilers, tables, footnotes. The other seed post is the gentle tour; this one is the exhaustive list, and my regression test.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/the-rendering-reference/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the rendering reference — algoatson.github.io">
+<meta property="og:description" content="every block this site knows how to render, in one scroll — listings, the checksec panel, admonitions, spoilers, tables, footnotes. The other seed post is the gentle tour; this one is the exhaustive list, and my regression test.">
+<meta property="og:url" content="https://algoatson.github.io/p/the-rendering-reference/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/the-rendering-reference.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the rendering reference", "datePublished": "2026-06-10", "dateModified": "2026-06-12", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "every block this site knows how to render, in one scroll — listings, the checksec panel, admonitions, spoilers, tables, footnotes. The other seed post is the gentle tour; this one is the exhaustive list, and my regression test.", "url": "https://algoatson.github.io/p/the-rendering-reference/", "mainEntityOfPage": "https://algoatson.github.io/p/the-rendering-reference/", "keywords": "meta, reference"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the rendering reference</h1>
+  <div class="meta"><span>2026-06-10</span><span class="upd">updated 2026-06-12</span><span>7 min read</span><a class="tag" href="/tags/meta/">meta</a> <a class="tag" href="/tags/reference/">reference</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#text-the-boring-parts">text, the boring parts</a></li>
+<li><a href="#code-listings">code listings</a></li>
+<li><a href="#hexdumps-and-diffs">hexdumps and diffs</a></li>
+<li><a href="#know-your-target">know your target</a></li>
+<li><a href="#admonitions">admonitions</a></li>
+<li><a href="#spoilers-and-folds">spoilers and folds</a></li>
+<li><a href="#tables">tables</a></li>
+<li><a href="#math">math</a></li>
+<li><a href="#diagrams-and-screenshots">diagrams and screenshots</a></li>
+<li><a href="#terminal-recordings">terminal recordings</a></li>
+<li><a href="#footnotes">footnotes</a></li>
+<li><a href="#everything-that-isnt-a-block">everything that isn't a block</a></li>
+<li><a href="#one-short-tail">one short tail</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>I keep one page that exercises every block this generator renders. It's half
+showcase, half regression test: if something here looks wrong after I touch the
+build, I broke it. The gentle walkthrough lives in
+<a href="/p/this-site-is-a-folder-of-text-files/">its own post</a> — this is the exhaustive
+version. Read what you need and delete the file once you write your own.</p>
+<h2 id="text-the-boring-parts">text, the boring parts<a class="headerlink" href="#text-the-boring-parts" title="Permanent link">#</a></h2>
+<p>Body copy is plain prose. You get <strong>bold</strong>, <em>italic</em>, <del>struck through</del>,
+<ins>inserted</ins>, <code class="highlight">inline code</code>, and sub/superscripts like H<sub>2</sub>O and x<sup>2</sup>. Smart
+symbols fix the typography for you: type <code class="highlight">(c)</code> <code class="highlight">(tm)</code> <code class="highlight">+/-</code> <code class="highlight">--&gt;</code> <code class="highlight">=/=</code> <code class="highlight">1/2</code>
+and they render as © ™ ± → ≠ ½.</p>
+<p>Links come in two flavours: an <a href="/about/">internal one</a> and an
+<a href="https://pwn.college" class="ext" target="_blank" rel="noopener">external one</a> — the external link grows an arrow and opens
+in a new tab on its own, no markup needed. Abbreviations get a dotted underline:
+hover <abbr title="HyperText Markup Language">HTML</abbr> to see it expanded.</p>
+<blockquote>
+<p>Block quotes read like a quoted patch note — a thin rule on the left, dimmed
+text, no drama.</p>
+</blockquote>
+<p>Lists nest the way you'd expect:</p>
+<ul>
+<li>top level<ul>
+<li>nested, with a dash marker</li>
+<li>and another one</li>
+</ul>
+</li>
+<li>back out again
+1. ordered
+2. and counted</li>
+</ul>
+<p>Task lists track a target without a checkbox library:</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> dump the binary</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> find the check</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> beat the check</li>
+</ul>
+<p>Definition lists, for when a glossary is the clearest format:</p>
+<dl>
+<dt>tcache</dt>
+<dd>per-thread cache of freed chunks; the hottest path in glibc <code class="highlight">malloc</code>.</dd>
+<dt>safe-linking</dt>
+<dd>the XOR mangling that made tcache <code class="highlight">next</code> overwrites need a heap leak first.</dd>
+</dl>
+<h2 id="code-listings">code listings<a class="headerlink" href="#code-listings" title="Permanent link">#</a></h2>
+<p>The thing a blog like this lives or dies on. Fences become listings with a
+filename, a language tag, line numbers, and a copy button. <strong>Click any line
+number</strong> to deep-link it — the URL updates and the line lights up.</p>
+<figure class="codeblock"><figcaption><span class="fname">vuln.c</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#vulnc-1">1</a></span>
+<span class="normal"><a href="#vulnc-2">2</a></span>
+<span class="normal"><a href="#vulnc-3">3</a></span>
+<span class="normal"><a href="#vulnc-4">4</a></span>
+<span class="normal"><a href="#vulnc-5">5</a></span>
+<span class="normal"><a href="#vulnc-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="vulnc-1"><span class="kt">int</span><span class="w"> </span><span class="nf">authenticate</span><span class="p">(</span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="vulnc-2"><span class="w">    </span><span class="kt">char</span><span class="w"> </span><span class="n">passwd</span><span class="p">[</span><span class="mi">16</span><span class="p">];</span>
+</span><span id="vulnc-3"><span class="hll"><span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">authed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w">            </span><span class="c1">// sits right above the buffer</span>
+</span></span><span id="vulnc-4"><span class="hll"><span class="w">    </span><span class="n">strcpy</span><span class="p">(</span><span class="n">passwd</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">);</span><span class="w">     </span><span class="c1">// no bounds check — overflow into `authed`</span>
+</span></span><span id="vulnc-5"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">authed</span><span class="p">;</span>
+</span><span id="vulnc-6"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Highlighting is greyscale — weight and inverse video, never hue. The same lexer
+machinery handles whatever you point it at:</p>
+<figure class="codeblock"><figcaption><span class="fname">solve.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#solvepy-1">1</a></span>
+<span class="normal"><a href="#solvepy-2">2</a></span>
+<span class="normal"><a href="#solvepy-3">3</a></span>
+<span class="normal"><a href="#solvepy-4">4</a></span>
+<span class="normal"><a href="#solvepy-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="solvepy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="solvepy-2">
+</span><span id="solvepy-3"><span class="n">io</span> <span class="o">=</span> <span class="n">remote</span><span class="p">(</span><span class="s2">&quot;chal.example.org&quot;</span><span class="p">,</span> <span class="mi">1337</span><span class="p">)</span>
+</span><span id="solvepy-4"><span class="n">io</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;A&quot;</span> <span class="o">*</span> <span class="mi">24</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mh">0xdeadbeefcafef00d</span><span class="p">))</span>
+</span><span id="solvepy-5"><span class="n">io</span><span class="o">.</span><span class="n">interactive</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<figure class="codeblock"><figcaption><span class="fname">shellcode.asm</span><span class="lang">nasm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#shellcodeasm-1">1</a></span>
+<span class="normal"><a href="#shellcodeasm-2">2</a></span>
+<span class="normal"><a href="#shellcodeasm-3">3</a></span>
+<span class="normal"><a href="#shellcodeasm-4">4</a></span>
+<span class="normal"><a href="#shellcodeasm-5">5</a></span>
+<span class="normal"><a href="#shellcodeasm-6">6</a></span>
+<span class="normal"><a href="#shellcodeasm-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="shellcodeasm-1"><span class="nl">_start:</span>
+</span><span id="shellcodeasm-2"><span class="w">    </span><span class="nf">xor</span><span class="w">    </span><span class="nb">eax</span><span class="p">,</span><span class="w"> </span><span class="nb">eax</span>
+</span><span id="shellcodeasm-3"><span class="w">    </span><span class="nf">push</span><span class="w">   </span><span class="nb">eax</span>
+</span><span id="shellcodeasm-4"><span class="w">    </span><span class="nf">push</span><span class="w">   </span><span class="mh">0x68732f2f</span><span class="w">      </span><span class="c1">; &quot;//sh&quot;</span>
+</span><span id="shellcodeasm-5"><span class="w">    </span><span class="nf">push</span><span class="w">   </span><span class="mh">0x6e69622f</span><span class="w">      </span><span class="c1">; &quot;/bin&quot;</span>
+</span><span id="shellcodeasm-6"><span class="w">    </span><span class="nf">mov</span><span class="w">    </span><span class="nb">ebx</span><span class="p">,</span><span class="w"> </span><span class="nb">esp</span>
+</span><span id="shellcodeasm-7"><span class="w">    </span><span class="nf">int</span><span class="w">    </span><span class="mh">0x80</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Put <code class="highlight">{title=&quot;x.c&quot; hl_lines=&quot;3 4&quot;}</code> after the language to set the filename and
+highlight lines. A fence with no language is plain text — handy for a stack
+diagram, where you want the monospace grid but no syntax guesses.</p>
+<h2 id="hexdumps-and-diffs">hexdumps and diffs<a class="headerlink" href="#hexdumps-and-diffs" title="Permanent link">#</a></h2>
+<p>A <code class="highlight">hexdump</code> fence turns its content into an aligned dump — offset, bytes, ascii.
+By default it dumps the UTF-8 bytes of the text:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">greeting</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  73 65 67 66 61 75 6c 74  7b 68 33 78 64 75 6d 70  <span class="asc">|segfault{h3xdump|</span>
+<span class="off">00000010</span>  5f 34 6c 6c 5f 74 68 33  5f 74 68 31 6e 67 73 7d  <span class="asc">|_4ll_th3_th1ngs}|</span></pre></div></figure>
+<p>Pass <code class="highlight">{from=hex}</code> to dump a hex string instead, and <code class="highlight">{hl=&quot;0-3&quot;}</code> to call out byte
+offsets — here, the ELF magic:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">header</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  <mark>7f</mark> <mark>45</mark> <mark>4c</mark> <mark>46</mark> 02 01 01 00  00 00 00 00 00 00 00 00  <span class="asc">|<mark>.</mark><mark>E</mark><mark>L</mark><mark>F</mark>............|</span></pre></div></figure>
+<p>Diffs are just a <code class="highlight">```diff</code> fence. Pygments greys the deletions and brightens
+the insertions — no red, no green — and each changed line gets a gutter bar:</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">patch.diff</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#patchdiff-1">1</a></span>
+<span class="normal"><a href="#patchdiff-2">2</a></span>
+<span class="normal"><a href="#patchdiff-3">3</a></span>
+<span class="normal"><a href="#patchdiff-4">4</a></span>
+<span class="normal"><a href="#patchdiff-5">5</a></span>
+<span class="normal"><a href="#patchdiff-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="patchdiff-1"><span class="w"> </span>int authenticate(char *input) {
+</span><span id="patchdiff-2"><span class="w"> </span>    char passwd[16];
+</span><span id="patchdiff-3"><span class="gd">-    strcpy(passwd, input);</span>
+</span><span id="patchdiff-4"><span class="gi">+    strncpy(passwd, input, sizeof(passwd) - 1);</span>
+</span><span id="patchdiff-5"><span class="w"> </span>    return authed;
+</span><span id="patchdiff-6"><span class="w"> </span>}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Wide listings — long disassembly, a 16-byte hexdump on a narrow screen — scroll
+sideways with a fade on the right edge so you know there's more.</p>
+<h2 id="know-your-target">know your target<a class="headerlink" href="#know-your-target" title="Permanent link">#</a></h2>
+<p>Every pwn writeup opens with the same question, so there's a block for it: a
+<code class="highlight">checksec</code>-style panel, facts on one side, mitigations as a greyscale checklist
+on the other.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./challenge</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.35 (Ubuntu glibc 2.35-0ubuntu3)</dd></div><div><dt>category</dt><dd>pwn · 487 pts</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">RELRO</span><span class="lead" aria-hidden="true"></span><span class="mv">full</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">Canary</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">ASLR</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li></ul></div></figure>
+<p>It's <code class="highlight">key: value</code> lines inside a <code class="highlight">target</code> fence:</p>
+<figure class="codeblock"><figcaption><span class="lang">md</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span>
+<span class="normal"><a href="#code-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="sb">```target</span>
+</span><span id="code-2"><span class="s">file: ./challenge</span>
+</span><span id="code-3"><span class="s">arch: amd64-64-little</span>
+</span><span id="code-4"><span class="s">NX: on</span>
+</span><span id="code-5"><span class="s">Canary: off</span>
+</span><span id="code-6"><span class="sb">```</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Anything that reads like <code class="highlight">on</code> / <code class="highlight">off</code> / <code class="highlight">full</code> / <code class="highlight">partial</code> / <code class="highlight">none</code> becomes a
+mitigation row with a ✓ or ✗; everything else is a plain fact; <code class="highlight">file:</code> (or
+<code class="highlight">binary:</code>) becomes the title. No red, no green: the enabled mitigations sit back
+in grey, and the disabled ones — the way in — stay bright.</p>
+<h2 id="admonitions">admonitions<a class="headerlink" href="#admonitions" title="Permanent link">#</a></h2>
+<p>Callouts for the aside that would otherwise wreck a paragraph. The first word
+picks the style:</p>
+<div class="admonition note">
+<p class="admonition-title">note</p>
+<p>The neutral aside. The one you'll reach for most.</p>
+</div>
+<div class="admonition tip">
+<p class="admonition-title">tip</p>
+<p>A shortcut, or a cleaner way to do the thing you just did the hard way.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">footgun</p>
+<p>The detail that desyncs your disassembly or aborts your exploit three
+instructions later.</p>
+</div>
+<div class="admonition danger">
+<p class="admonition-title">danger</p>
+<p>Reserved for the genuinely destructive — the command you shouldn't paste.</p>
+</div>
+<p>Source is <code class="highlight">!!! type &quot;title&quot;</code> and a four-space-indented body:</p>
+<figure class="codeblock"><figcaption><span class="lang">md</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-6-1">1</a></span>
+<span class="normal"><a href="#code-6-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-6-1">!!! warning &quot;footgun&quot;
+</span><span id="code-6-2">    The detail that desyncs your disassembly three instructions later.
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="spoilers-and-folds">spoilers and folds<a class="headerlink" href="#spoilers-and-folds" title="Permanent link">#</a></h2>
+<p>CTF writeups have a spoiler problem — public walkthrough, hidden flag. A spoiler
+block folds the answer away until clicked, and it's a plain <code class="highlight">&lt;details&gt;</code>, so it
+still hides with JavaScript switched off.</p>
+<details class="spoiler">
+<summary>the flag</summary>
+<p><code class="highlight">segfault{r3nd3r1ng_4ll_th3_th1ngs}</code> — and the one-gadget that dropped it
+stays right here, out of sight until you decide you want it.</p>
+</details>
+<p>Use <code class="highlight">???</code> for any fold and <code class="highlight">???+</code> to start it open — good for a long appendix you
+want present but collapsed by default:</p>
+<details class="note" open>
+<summary>expanded on load</summary>
+<p>Same machinery, open by default. The reader can still fold it away.</p>
+</details>
+<h2 id="tables">tables<a class="headerlink" href="#tables" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th>technique</th>
+<th>primitive it gives you</th>
+<th>mitigation that hurts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tcache poisoning</td>
+<td>near-arbitrary write</td>
+<td>safe-linking, glibc ≥ 2.32</td>
+</tr>
+<tr>
+<td>ret2libc</td>
+<td>call any libc function</td>
+<td>ASLR, PIE</td>
+</tr>
+<tr>
+<td>format string</td>
+<td>read/write where you point</td>
+<td>FORTIFY, <code class="highlight">-Wformat</code></td>
+</tr>
+</tbody>
+</table>
+<p>Rows dim on hover. The line-number gutter of a code listing pointedly does not,
+even in light mode — that was a real bug once.</p>
+<h2 id="math">math<a class="headerlink" href="#math" title="Permanent link">#</a></h2>
+<p>Crypto challenges and the occasional bit of analysis need real notation. Write
+LaTeX between dollar signs — inline like <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mo movablelimits="true">gcd</mo><mo stretchy="false">&#x00028;</mo><mi>e</mi><mo>&#x0002C;</mo><mi>&#x003C6;</mi><mo stretchy="false">&#x00028;</mo><mi>n</mi><mo stretchy="false">&#x00029;</mo><mo stretchy="false">&#x00029;</mo><mo>&#x0003D;</mo><mn>1</mn></mrow></math></span> — or as a
+display block:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>c</mi><mo>&#x02261;</mo><msup><mi>m</mi><mrow><mi>e</mi></mrow></msup><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mi>n</mi></mrow><mo>&#x00029;</mo><mspace width="2em" /><mi>m</mi><mo>&#x02261;</mo><msup><mi>c</mi><mrow><mi>d</mi></mrow></msup><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mi>n</mi></mrow><mo>&#x00029;</mo></mrow></math></div>
+<p>It renders to <strong>MathML at build time</strong>: the browser draws it natively, so there's
+no math library, no extra web font, and no JavaScript shipped for it. (<code class="highlight">$5</code> and
+<code class="highlight">$10</code> are left alone — the parser isn't that naive.)</p>
+<h2 id="diagrams-and-screenshots">diagrams and screenshots<a class="headerlink" href="#diagrams-and-screenshots" title="Permanent link">#</a></h2>
+<p>Drop in an image and it becomes a figure — lazy-loaded, with its dimensions baked
+in at build time so the page doesn't reflow as it loads, and click-to-zoom into a
+lightbox. The alt text becomes the caption.</p>
+<figure class="img"><img alt="stack frame for a classic smash: the buffer sits right below authed and the saved return address" src="/img/stack.png" loading="lazy" decoding="async" width="860" height="420"><figcaption>stack frame for a classic smash: the buffer sits right below authed and the saved return address</figcaption></figure>
+<p>Images live under <code class="highlight">static/</code> in the project root; <code class="highlight">static/img/stack.png</code> is served
+at <code class="highlight">/img/stack.png</code>.</p>
+<h2 id="terminal-recordings">terminal recordings<a class="headerlink" href="#terminal-recordings" title="Permanent link">#</a></h2>
+<p>For a pwn demo or a tool run, embed an asciinema recording. It's rendered to a
+self-contained animated SVG <strong>at build time</strong> — greyscaled to match the site, no
+runtime player, no JavaScript, no CDN:</p>
+<figure class="cast"><figcaption><span class="fname">checksec.cast</span><span class="lang">cast</span></figcaption><div class="cast__svg"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="740" height="238.81"><rect width="740" height="238.81" rx="0" ry="0" class="a"/><svg height="238.81" viewBox="0 0 74 23.881" width="740" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><style>@keyframes f{0%{transform:translateX(0)}9.1%{transform:translateX(-74px)}20.5%{transform:translateX(-148px)}31.8%{transform:translateX(-222px)}38.6%{transform:translateX(-296px)}45.5%{transform:translateX(-370px)}52.3%{transform:translateX(-444px)}59.1%{transform:translateX(-518px)}65.9%{transform:translateX(-592px)}77.3%{transform:translateX(-666px)}to{transform:translateX(-740px)}}.a{fill:#2d2d2d}.c{fill:#bfbfbf;white-space:pre}</style><g font-family="Monaco,Consolas,Menlo,'Bitstream Vera Sans Mono','Powerline Symbols',monospace" font-size="1.67"><defs><symbol id="1"><text y="1.67" class="c">$</text></symbol><symbol id="2"><text y="1.67" class="c">$</text><text x="2.004" y="1.67" class="c">checksec</text><text x="11.022" y="1.67" class="c">--file=./challenge</text></symbol><symbol id="3"><text y="1.67" class="c">[*]</text><text x="4.008" y="1.67" class="c">&apos;/ctf/challenge&apos;</text></symbol><symbol id="4"><text x="4.008" y="1.67" class="c">Arch:</text><text x="14.028" y="1.67" class="c">amd64-64-little</text></symbol><symbol id="5"><text x="4.008" y="1.67" class="c">RELRO:</text><text x="14.028" y="1.67" class="c">Full</text><text x="19.038" y="1.67" class="c">RELRO</text></symbol><symbol id="6"><text x="4.008" y="1.67" class="c">Stack:</text><text x="14.028" y="1.67" class="c">No</text><text x="17.034" y="1.67" class="c">canary</text><text x="24.048" y="1.67" class="c">found</text></symbol><symbol id="7"><text x="4.008" y="1.67" class="c">NX:</text><text x="14.028" y="1.67" class="c">NX</text><text x="17.034" y="1.67" class="c">enabled</text></symbol><symbol id="8"><text x="4.008" y="1.67" class="c">PIE:</text><text x="14.028" y="1.67" class="c">PIE</text><text x="18.036" y="1.67" class="c">enabled</text></symbol><symbol id="a"><path fill="transparent" d="M0 0h74v11H0z"/></symbol><symbol id="b"><path fill="#757575" d="M0 0h1.102v2.171H0z"/></symbol></defs><path class="a" d="M0 0h74v23.881H0z"/><g style="animation-duration:4.4s;animation-iteration-count:infinite;animation-name:f;animation-timing-function:steps(1,end)"><svg width="814"><svg><use xlink:href="#a"/><use xlink:href="#b" x="-.004"/></svg><svg x="74"><use xlink:href="#a"/><use xlink:href="#b" x="1.996"/><use xlink:href="#1"/></svg><svg x="148"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="2.146"/><use xlink:href="#2"/></svg><svg x="222"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="4.317"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/></svg><svg x="296"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="6.488"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/></svg><svg x="370"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="8.659"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/></svg><svg x="444"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="10.83"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/></svg><svg x="518"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="13.001"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/><use xlink:href="#7" y="10.855"/></svg><svg x="592"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="15.172"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/><use xlink:href="#7" y="10.855"/><use xlink:href="#8" y="13.026"/></svg><svg x="666"><use xlink:href="#a"/><use xlink:href="#b" x="1.996" y="15.172"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/><use xlink:href="#7" y="10.855"/><use xlink:href="#8" y="13.026"/><use xlink:href="#1" y="15.197"/></svg><svg x="740"><use xlink:href="#a"/><use xlink:href="#b" x="1.996" y="15.172"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/><use xlink:href="#7" y="10.855"/><use xlink:href="#8" y="13.026"/><use xlink:href="#1" y="15.197"/></svg></svg></g></g></svg></svg></div></figure>
+<p>Record with <code class="highlight">asciinema rec demo.cast</code>, drop the file under <code class="highlight">static/casts/</code>, and
+point a <code class="highlight">cast</code> fence at its path. (This is the one feature that needs a build-time
+tool — <code class="highlight">npm install</code> pulls in <code class="highlight">svg-term</code>; without it the block degrades to a
+note instead of breaking the build.)</p>
+<h2 id="footnotes">footnotes<a class="headerlink" href="#footnotes" title="Permanent link">#</a></h2>
+<p>For the tangent that belongs at the bottom, not mid-sentence.<sup id="fnref:aim"><a class="footnote-ref" href="#fn:aim">1</a></sup> They link
+both ways, so a reader can dip into the aside and climb back out without losing
+their place.</p>
+<h2 id="everything-that-isnt-a-block">everything that isn't a block<a class="headerlink" href="#everything-that-isnt-a-block" title="Permanent link">#</a></h2>
+<p>Some features aren't markup — they're the page around the words:</p>
+<ul>
+<li>the <strong>contents</strong> list pinned to the right tracks your scroll (you've watched it
+  move down as you read); on a phone it folds inline at the top.</li>
+<li>the hairline along the top of the window is a <strong>reading-progress</strong> bar.</li>
+<li>posts that share a tag grow a <strong>related</strong> list at the foot — scroll down, this
+  one is wired to the tour post.</li>
+<li>hit <code class="highlight">/</code> for <strong>fuzzy search</strong> over every title and body, <code class="highlight">j</code>/<code class="highlight">k</code> to walk the
+  index, <code class="highlight">t</code> for light mode, <code class="highlight">?</code> for the full key map.</li>
+<li>every post gets a generated monochrome <strong>share card</strong>, an <strong>RSS</strong> entry, and a
+  clean <strong>print</strong> layout — try Ctrl-P and watch the chrome drop away and the code
+  go ink-on-paper.</li>
+</ul>
+<p>None of it is load-bearing. Kill JavaScript and this is still a clean, readable
+document, which is the entire point.</p>
+<h2 id="one-short-tail">one short tail<a class="headerlink" href="#one-short-tail" title="Permanent link">#</a></h2>
+<p>A deliberately tiny last section — because a contents list has to be able to
+reach the bottom entry, and that took a fix to get right.</p>
+<div class="footnote">
+<hr>
+<ol>
+<li id="fn:aim">
+<p>Like this one. The number is auto-assigned and back-links to exactly
+where you were reading.&#160;<a class="footnote-backref" href="#fnref:aim" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/this-site-is-a-folder-of-text-files/"><span class="row__date">2026-01-05</span><span class="row__tag">meta</span><span class="row__title">this site is a folder of text files</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><span></span><a class="next" href="/p/rizin-radare2-in-anger/"><span class="lbl">older &#8250;</span>rizin and radare2 in anger</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

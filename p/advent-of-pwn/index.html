@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>advent of pwn 2025 — algoatson.github.io</title>
+<meta name="description" content="A December advent calendar of pwn and reversing challenges — one door a day, full solves folded behind spoilers. Day 1 byte-diffs Santa&#x27;s naughty-or-nice list; day 2 coaxes a holiday daemon into dumping coal.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/advent-of-pwn/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="advent of pwn 2025 — algoatson.github.io">
+<meta property="og:description" content="A December advent calendar of pwn and reversing challenges — one door a day, full solves folded behind spoilers. Day 1 byte-diffs Santa&#x27;s naughty-or-nice list; day 2 coaxes a holiday daemon into dumping coal.">
+<meta property="og:url" content="https://algoatson.github.io/p/advent-of-pwn/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/advent-of-pwn.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "advent of pwn 2025", "datePublished": "2025-12-25", "dateModified": "2026-06-13", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A December advent calendar of pwn and reversing challenges — one door a day, full solves folded behind spoilers. Day 1 byte-diffs Santa's naughty-or-nice list; day 2 coaxes a holiday daemon into dumping coal.", "url": "https://algoatson.github.io/p/advent-of-pwn/", "mainEntityOfPage": "https://algoatson.github.io/p/advent-of-pwn/", "keywords": "ctf, pwn, rev"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>advent of pwn 2025</h1>
+  <div class="meta"><span>2025-12-25</span><span class="upd">updated 2026-06-13</span><span>5 min read</span><a class="tag" href="/tags/ctf/">ctf</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rev/">rev</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-calendar">The calendar</a></li>
+<li><a href="#day-1-check-list">Day 1 — check-list</a></li>
+<li><a href="#day-2-claus7">Day 2 — claus(7)</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><strong>Advent of Pwn</strong> is a daily-December CTF: one challenge behind each door, Santa
+all the way down. I solve them and write up the ones worth writing up here —
+prompts in the open, full solves folded, so you can try the door before you peek.</p>
+<h2 id="the-calendar">The calendar<a class="headerlink" href="#the-calendar" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">day</th>
+<th>challenge</th>
+<th>category</th>
+<th>status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">01</td>
+<td><code class="highlight">check-list</code></td>
+<td>reversing</td>
+<td>solved</td>
+</tr>
+<tr>
+<td style="text-align: right;">02</td>
+<td><code class="highlight">claus(7)</code></td>
+<td>pwn</td>
+<td>open · solve pending</td>
+</tr>
+</tbody>
+</table>
+<h2 id="day-1-check-list">Day 1 — check-list<a class="headerlink" href="#day-1-check-list" title="Permanent link">#</a></h2>
+<blockquote>
+<p>Every year, Santa maintains the legendary Naughty-or-Nice list, and despite the
+rumors, there's no magic behind it at all — it's pure, meticulous byte-level
+bookkeeping. Apply every tiny change exactly and confirm the final list matches
+perfectly. Check it once, check it twice; Santa does not tolerate even a single
+incorrect byte.</p>
+</blockquote>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">check-list</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>x86-64</dd></div><div><dt>input</dt><dd>read(0, [rbp-0x400], 0x400)</dd></div><div><dt>scheme</dt><dd>per-byte add/sub, then a wall of cmp</dd></div></dl></div></figure>
+<p>The whole binary is one straight-line function: read <code class="highlight">0x400</code> bytes onto the
+stack, mutate them in place with a long run of <code class="highlight">add</code>/<code class="highlight">sub</code>, then gate the flag
+behind an equally long run of <code class="highlight">cmp … / jne fail</code>. No loops, no key, no entropy —
+just bookkeeping.</p>
+<figure class="codeblock"><figcaption><span class="fname">check-list — .text</span><span class="lang">nasm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#check-list-text-1"> 1</a></span>
+<span class="normal"><a href="#check-list-text-2"> 2</a></span>
+<span class="normal"><a href="#check-list-text-3"> 3</a></span>
+<span class="normal"><a href="#check-list-text-4"> 4</a></span>
+<span class="normal"><a href="#check-list-text-5"> 5</a></span>
+<span class="normal"><a href="#check-list-text-6"> 6</a></span>
+<span class="normal"><a href="#check-list-text-7"> 7</a></span>
+<span class="normal"><a href="#check-list-text-8"> 8</a></span>
+<span class="normal"><a href="#check-list-text-9"> 9</a></span>
+<span class="normal"><a href="#check-list-text-10">10</a></span>
+<span class="normal"><a href="#check-list-text-11">11</a></span>
+<span class="normal"><a href="#check-list-text-12">12</a></span>
+<span class="normal"><a href="#check-list-text-13">13</a></span>
+<span class="normal"><a href="#check-list-text-14">14</a></span>
+<span class="normal"><a href="#check-list-text-15">15</a></span>
+<span class="normal"><a href="#check-list-text-16">16</a></span>
+<span class="normal"><a href="#check-list-text-17">17</a></span>
+<span class="normal"><a href="#check-list-text-18">18</a></span>
+<span class="normal"><a href="#check-list-text-19">19</a></span>
+<span class="normal"><a href="#check-list-text-20">20</a></span>
+<span class="normal"><a href="#check-list-text-21">21</a></span>
+<span class="normal"><a href="#check-list-text-22">22</a></span>
+<span class="normal"><a href="#check-list-text-23">23</a></span>
+<span class="normal"><a href="#check-list-text-24">24</a></span>
+<span class="normal"><a href="#check-list-text-25">25</a></span>
+<span class="normal"><a href="#check-list-text-26">26</a></span>
+<span class="normal"><a href="#check-list-text-27">27</a></span>
+<span class="normal"><a href="#check-list-text-28">28</a></span>
+<span class="normal"><a href="#check-list-text-29">29</a></span>
+<span class="normal"><a href="#check-list-text-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="check-list-text-1"><span class="nl">.text:</span>
+</span><span id="check-list-text-2"><span class="w">    </span><span class="nf">mov</span><span class="w">    </span><span class="nb">rbp</span><span class="p">,</span><span class="nb">rsp</span>
+</span><span id="check-list-text-3"><span class="w">    </span><span class="nf">sub</span><span class="w">    </span><span class="nb">rsp</span><span class="p">,</span><span class="mh">0x500</span>
+</span><span id="check-list-text-4"><span class="w">    </span><span class="nf">mov</span><span class="w">    </span><span class="nb">eax</span><span class="p">,</span><span class="mh">0x0</span>
+</span><span id="check-list-text-5"><span class="w">    </span><span class="nf">mov</span><span class="w">    </span><span class="nb">edi</span><span class="p">,</span><span class="mh">0x0</span>
+</span><span id="check-list-text-6"><span class="w">    </span><span class="nf">lea</span><span class="w">    </span><span class="nb">rsi</span><span class="p">,[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x400</span><span class="p">]</span>
+</span><span id="check-list-text-7"><span class="w">    </span><span class="nf">mov</span><span class="w">    </span><span class="nb">edx</span><span class="p">,</span><span class="mh">0x400</span>
+</span><span id="check-list-text-8"><span class="hll"><span class="w">    </span><span class="nf">syscall</span><span class="w">                         </span><span class="c1">; read 0x400 bytes to [rbp-0x400]</span>
+</span></span><span id="check-list-text-9">
+</span><span id="check-list-text-10"><span class="w">    </span><span class="c1">; perform all the transformations</span>
+</span><span id="check-list-text-11"><span class="w">    </span><span class="nf">sub</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0xf4</span><span class="p">],</span><span class="mh">0xa2</span>
+</span><span id="check-list-text-12"><span class="w">    </span><span class="nf">add</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x20b</span><span class="p">],</span><span class="mh">0xf9</span>
+</span><span id="check-list-text-13"><span class="w">    </span><span class="nf">sub</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x381</span><span class="p">],</span><span class="mh">0x18</span>
+</span><span id="check-list-text-14"><span class="w">    </span><span class="nf">add</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x3a3</span><span class="p">],</span><span class="mh">0xe4</span>
+</span><span id="check-list-text-15"><span class="w">    </span><span class="nf">sub</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x2b</span><span class="p">],</span><span class="mh">0x55</span>
+</span><span id="check-list-text-16"><span class="w">    </span><span class="nf">add</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x2bc</span><span class="p">],</span><span class="mh">0x78</span>
+</span><span id="check-list-text-17"><span class="w">    </span><span class="nf">add</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x287</span><span class="p">],</span><span class="mh">0xf8</span>
+</span><span id="check-list-text-18"><span class="w">    </span><span class="nf">sub</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x370</span><span class="p">],</span><span class="mh">0x46</span>
+</span><span id="check-list-text-19"><span class="w">    </span><span class="c1">; ...</span>
+</span><span id="check-list-text-20">
+</span><span id="check-list-text-21"><span class="w">    </span><span class="c1">; perform all the comparisons</span>
+</span><span id="check-list-text-22"><span class="w">    </span><span class="nf">cmp</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x400</span><span class="p">],</span><span class="mh">0x86</span>
+</span><span id="check-list-text-23"><span class="w">    </span><span class="nf">jne</span><span class="w">    </span><span class="mh">0xaa4e6f</span>
+</span><span id="check-list-text-24"><span class="w">    </span><span class="nf">cmp</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x3ff</span><span class="p">],</span><span class="mh">0x46</span>
+</span><span id="check-list-text-25"><span class="w">    </span><span class="nf">jne</span><span class="w">    </span><span class="mh">0xaa4e6f</span>
+</span><span id="check-list-text-26"><span class="w">    </span><span class="nf">cmp</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x3fe</span><span class="p">],</span><span class="mh">0x2a</span>
+</span><span id="check-list-text-27"><span class="w">    </span><span class="nf">jne</span><span class="w">    </span><span class="mh">0xaa4e6f</span>
+</span><span id="check-list-text-28"><span class="w">    </span><span class="nf">cmp</span><span class="w">    </span><span class="kt">BYTE</span><span class="w"> </span><span class="nv">PTR</span><span class="w"> </span><span class="p">[</span><span class="nb">rbp</span><span class="o">-</span><span class="mh">0x3fd</span><span class="p">],</span><span class="mh">0x26</span>
+</span><span id="check-list-text-29"><span class="w">    </span><span class="nf">jne</span><span class="w">    </span><span class="mh">0xaa4e6f</span>
+</span><span id="check-list-text-30"><span class="w">    </span><span class="c1">; ...</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>No tricks, no anti-debug — the entire challenge is in that listing. The only
+thing to get right is the arithmetic.</p>
+<details class="spoiler">
+<summary>Day 1 — full solve</summary>
+<p>For each offset <em>i</em>, the input byte is transformed by its <code class="highlight">add</code>/<code class="highlight">sub</code> lines and
+then must equal that offset's <code class="highlight">cmp</code> target. Everything is a byte, so it all
+wraps at 8 bits:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>input</mtext><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mo>&#x0002B;</mo><mo>&#x02211;</mo><msub><mtext>add</mtext><mi>i</mi></msub><mo>&#x02212;</mo><mo>&#x02211;</mo><msub><mtext>sub</mtext><mi>i</mi></msub><mo>&#x02261;</mo><mtext>goal</mtext><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mn>256</mn></mrow><mo>&#x00029;</mo></mrow></math></div>
+<p>The wrap is the one thing worth checking — <code class="highlight">0xff + 2 == 1</code>, <code class="highlight">1 - 2 == 0xff</code> —
+and Python does it with a single <code class="highlight">&amp; 0xff</code>:</p>
+<figure class="codeblock"><figcaption><span class="lang">py</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="o">&gt;&gt;&gt;</span> <span class="p">(</span><span class="mh">0xff</span> <span class="o">+</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xff</span>
+</span><span id="code-2"><span class="mi">1</span>
+</span><span id="code-3"><span class="o">&gt;&gt;&gt;</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xff</span>
+</span><span id="code-4"><span class="mh">0xff</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>My first instinct was two tables: run the <code class="highlight">add</code>/<code class="highlight">sub</code> deltas on a zero-filled
+<strong>delta array</strong>, stash the <code class="highlight">cmp</code> targets in a <strong>goal array</strong>, then recover the
+input with a wrapping subtraction.</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>input</mtext><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mo>&#x0003D;</mo><mo stretchy="false">&#x00028;</mo><mtext>goal</mtext><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mo>&#x02212;</mo><mtext>delta</mtext><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mo stretchy="false">&#x00029;</mo><mo>mod</mo><mn>256</mn></mrow></math></div>
+<p>Then I noticed I was overcomplicating it. A <code class="highlight">cmp BYTE [rbp-off], imm</code> has the
+exact same shape as a transform — <code class="highlight">[rbp-off], imm</code> — so all three opcodes can
+fold into <strong>one</strong> accumulator and I never build a second array:</p>
+<ul>
+<li><code class="highlight">sub off, v</code>  →  add <code class="highlight">+v</code></li>
+<li><code class="highlight">add off, v</code>  →  add <code class="highlight">-v</code></li>
+<li><code class="highlight">cmp off, g</code>  →  add <code class="highlight">+g</code></li>
+</ul>
+<p>Sum those per offset and the accumulator <em>is</em> the input (mod 256), since
+<code class="highlight">goal - Σadd + Σsub</code> is exactly the recovery formula above.</p>
+<p>The second half is free indexing. The offsets are negative (<code class="highlight">-0x400</code> … <code class="highlight">-0x1</code>),
+and Python's negative indexing into a <code class="highlight">0x400</code>-long list maps <code class="highlight">-0x400 → 0</code>,
+<code class="highlight">-0x3ff → 1</code>, … <code class="highlight">-0x1 → 0x3ff</code> — straight into read order. No manual offset math.</p>
+<p>So the solve is just: disassemble <code class="highlight">.text</code>, regex every
+<code class="highlight">add|sub|cmp [rbp-off], imm</code>, accumulate, mask, send.</p>
+<figure class="codeblock"><figcaption><span class="fname">solve.py</span><span class="lang">py</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#solvepy-1"> 1</a></span>
+<span class="normal"><a href="#solvepy-2"> 2</a></span>
+<span class="normal"><a href="#solvepy-3"> 3</a></span>
+<span class="normal"><a href="#solvepy-4"> 4</a></span>
+<span class="normal"><a href="#solvepy-5"> 5</a></span>
+<span class="normal"><a href="#solvepy-6"> 6</a></span>
+<span class="normal"><a href="#solvepy-7"> 7</a></span>
+<span class="normal"><a href="#solvepy-8"> 8</a></span>
+<span class="normal"><a href="#solvepy-9"> 9</a></span>
+<span class="normal"><a href="#solvepy-10">10</a></span>
+<span class="normal"><a href="#solvepy-11">11</a></span>
+<span class="normal"><a href="#solvepy-12">12</a></span>
+<span class="normal"><a href="#solvepy-13">13</a></span>
+<span class="normal"><a href="#solvepy-14">14</a></span>
+<span class="normal"><a href="#solvepy-15">15</a></span>
+<span class="normal"><a href="#solvepy-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="solvepy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="solvepy-2">
+</span><span id="solvepy-3"><span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="s2">&quot;/challenge/check-list&quot;</span>
+</span><span id="solvepy-4"><span class="n">text</span> <span class="o">=</span> <span class="n">disasm</span><span class="p">(</span><span class="n">context</span><span class="o">.</span><span class="n">binary</span><span class="o">.</span><span class="n">section</span><span class="p">(</span><span class="s1">&#39;.text&#39;</span><span class="p">))</span>
+</span><span id="solvepy-5"><span class="hll"><span class="n">instructions</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;(add|cmp|sub) +BYTE PTR \[rbp(-0x[0-9a-f]+)\], (0x[0-9a-f]+)&#39;</span><span class="p">,</span> <span class="n">text</span><span class="p">)</span>
+</span></span><span id="solvepy-6"><span class="n">buffer</span> <span class="o">=</span> <span class="mh">0x400</span> <span class="o">*</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="solvepy-7">
+</span><span id="solvepy-8"><span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">instructions</span><span class="p">:</span>
+</span><span id="solvepy-9"><span class="hll">    <span class="n">buffer</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">i</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">0</span><span class="p">)]</span> <span class="o">+=</span> <span class="nb">int</span><span class="p">(</span><span class="n">i</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="mi">0</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="o">-</span><span class="mi">1</span> <span class="k">if</span> <span class="n">i</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;add&#39;</span> <span class="k">else</span> <span class="mi">1</span><span class="p">)</span>
+</span></span><span id="solvepy-10">
+</span><span id="solvepy-11"><span class="n">password</span> <span class="o">=</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">b</span> <span class="o">&amp;</span> <span class="mh">0xff</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">buffer</span><span class="p">)</span>
+</span><span id="solvepy-12"><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Password (hex): </span><span class="si">{</span><span class="n">password</span><span class="o">.</span><span class="n">hex</span><span class="p">()</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+</span><span id="solvepy-13">
+</span><span id="solvepy-14"><span class="k">with</span> <span class="n">process</span><span class="p">()</span> <span class="k">as</span> <span class="n">p</span><span class="p">:</span>
+</span><span id="solvepy-15">    <span class="n">p</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">password</span><span class="p">)</span>
+</span><span id="solvepy-16">    <span class="n">success</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Flag: </span><span class="si">{</span><span class="n">p</span><span class="o">.</span><span class="n">recvall</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">decode</span><span class="p">()</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">process()</code> does the rest — send the reconstructed list, scrape the flag off
+the tail. One pass, no brute force.</p>
+</details>
+<h2 id="day-2-claus7">Day 2 — claus(7)<a class="headerlink" href="#day-2-claus7" title="Permanent link">#</a></h2>
+<p>No binary listing this time — the whole prompt <em>is</em> a man page:</p>
+<figure class="codeblock"><figcaption><span class="fname">$ man claus</span><span class="lang">man</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#man-claus-1"> 1</a></span>
+<span class="normal"><a href="#man-claus-2"> 2</a></span>
+<span class="normal"><a href="#man-claus-3"> 3</a></span>
+<span class="normal"><a href="#man-claus-4"> 4</a></span>
+<span class="normal"><a href="#man-claus-5"> 5</a></span>
+<span class="normal"><a href="#man-claus-6"> 6</a></span>
+<span class="normal"><a href="#man-claus-7"> 7</a></span>
+<span class="normal"><a href="#man-claus-8"> 8</a></span>
+<span class="normal"><a href="#man-claus-9"> 9</a></span>
+<span class="normal"><a href="#man-claus-10">10</a></span>
+<span class="normal"><a href="#man-claus-11">11</a></span>
+<span class="normal"><a href="#man-claus-12">12</a></span>
+<span class="normal"><a href="#man-claus-13">13</a></span>
+<span class="normal"><a href="#man-claus-14">14</a></span>
+<span class="normal"><a href="#man-claus-15">15</a></span>
+<span class="normal"><a href="#man-claus-16">16</a></span>
+<span class="normal"><a href="#man-claus-17">17</a></span>
+<span class="normal"><a href="#man-claus-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="man-claus-1">CLAUS(7)                   Linux Programmer&#39;s Manual                   CLAUS(7)
+</span><span id="man-claus-2">
+</span><span id="man-claus-3">NAME
+</span><span id="man-claus-4">       claus - unstoppable holiday daemon
+</span><span id="man-claus-5">
+</span><span id="man-claus-6">DESCRIPTION
+</span><span id="man-claus-7">       Executes once per annum.
+</span><span id="man-claus-8">       Blocks SIGTSTP to ensure uninterrupted delivery.
+</span><span id="man-claus-9">       May dump coal if forced to quit (see BUGS).
+</span><span id="man-claus-10">
+</span><span id="man-claus-11">BUGS
+</span><span id="man-claus-12">       Under some configurations, quitting may result in coal being dumped into
+</span><span id="man-claus-13">       your stocking.
+</span><span id="man-claus-14">
+</span><span id="man-claus-15">SEE ALSO
+</span><span id="man-claus-16">       nice(1), core(5), elf(5), pty(7), signal(7)
+</span><span id="man-claus-17">
+</span><span id="man-claus-18">Linux                              Dec 2025                            CLAUS(7)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Santa hid the hint sheet in plain sight: <code class="highlight">SIGTSTP</code> is blocked, <em>forcing</em> a quit
+"dumps coal," and the <code class="highlight">SEE ALSO</code> line points straight at <code class="highlight">signal(7)</code>, <code class="highlight">core(5)</code>
+and <code class="highlight">elf(5)</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">Day 2 — solve pending</p>
+<p>Writeup in progress. I'll fold the full solve in here once it reads clean —
+the <code class="highlight">SEE ALSO</code> list is the entire hint sheet.</p>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a><a class="row" href="/p/ret2libc-warmup/"><span class="row__date">2026-01-29</span><span class="row__tag">pwn</span><span class="row__title">ret2libc on a warm-up: stack smash to shell</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/this-site-is-a-folder-of-text-files/"><span class="lbl">&#8249; newer</span>this site is a folder of text files</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

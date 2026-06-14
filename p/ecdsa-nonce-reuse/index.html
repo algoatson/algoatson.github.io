@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>two signatures, one nonce: recovering an ECDSA key — algoatson.github.io</title>
+<meta name="description" content="The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/ecdsa-nonce-reuse/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="two signatures, one nonce: recovering an ECDSA key — algoatson.github.io">
+<meta property="og:description" content="The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.">
+<meta property="og:url" content="https://algoatson.github.io/p/ecdsa-nonce-reuse/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/ecdsa-nonce-reuse.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "two signatures, one nonce: recovering an ECDSA key", "datePublished": "2026-03-22", "dateModified": "2026-03-22", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The signing oracle reused a nonce across two messages. That's the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.", "url": "https://algoatson.github.io/p/ecdsa-nonce-reuse/", "mainEntityOfPage": "https://algoatson.github.io/p/ecdsa-nonce-reuse/", "keywords": "crypto, ctf, math"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>two signatures, one nonce: recovering an ECDSA key</h1>
+  <div class="meta"><span>2026-03-22</span><span>4 min read</span><a class="tag" href="/tags/crypto/">crypto</a> <a class="tag" href="/tags/ctf/">ctf</a> <a class="tag" href="/tags/math/">math</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-signing-relation">the signing relation</a></li>
+<li><a href="#reuse-collapses-it">reuse collapses it</a></li>
+<li><a href="#when-the-nonce-is-only-biased">when the nonce is only biased</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><blockquote>
+<p>The flag-signing service will sign any message you send and hand back
+<code class="highlight">(r, s)</code>. It signs two of them before it rotates the nonce. Find the key.</p>
+</blockquote>
+<p>ECDSA is unforgiving about one thing above all others: the per-signature nonce
+<span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>k</mi></mrow></math></span> must be secret and never repeated. Repeat it once and the private key falls
+out with grade-school algebra.</p>
+<h2 id="the-signing-relation">the signing relation<a class="headerlink" href="#the-signing-relation" title="Permanent link">#</a></h2>
+<p>For a curve of order <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>n</mi></mrow></math></span>, private key <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>d</mi></mrow></math></span>, message hash <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>z</mi></mrow></math></span> and nonce <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>k</mi></mrow></math></span>, a
+signature is the pair <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mo stretchy="false">&#x00028;</mo><mi>r</mi><mo>&#x0002C;</mo><mi>s</mi><mo stretchy="false">&#x00029;</mo></mrow></math></span> with <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>r</mi><mo>&#x0003D;</mo><mo stretchy="false">&#x00028;</mo><mi>k</mi><mi>G</mi><msub><mo stretchy="false">&#x00029;</mo><mi>x</mi></msub><mo>mod</mo><mi>n</mi></mrow></math></span> and</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>s</mi><mo>&#x02261;</mo><msup><mi>k</mi><mrow><mo>&#x02212;</mo><mn>1</mn></mrow></msup><mspace width="0.167em" /><mo stretchy="false">&#x00028;</mo><mi>z</mi><mo>&#x0002B;</mo><mi>r</mi><mspace width="0.167em" /><mi>d</mi><mo stretchy="false">&#x00029;</mo><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mi>n</mi></mrow><mo>&#x00029;</mo><mo>&#x0002E;</mo></mrow></math></div>
+<p>Everything here is mod <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>n</mi></mrow></math></span>, the group order — not the field prime. Mixing the two
+moduli is the most common way to spend an afternoon debugging a correct attack.</p>
+<table>
+<thead>
+<tr>
+<th>symbol</th>
+<th>meaning</th>
+<th>known to me?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>n</mi></mrow></math></span></td>
+<td>order of the base point <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>G</mi></mrow></math></span></td>
+<td>yes (public)</td>
+</tr>
+<tr>
+<td><span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>d</mi></mrow></math></span></td>
+<td>private key</td>
+<td><strong>target</strong></td>
+</tr>
+<tr>
+<td><span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>k</mi></mrow></math></span></td>
+<td>per-signature nonce</td>
+<td>secret</td>
+</tr>
+<tr>
+<td><span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>z</mi></mrow></math></span></td>
+<td><span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mtext>H</mtext><mo stretchy="false">&#x00028;</mo><mi>m</mi><mo stretchy="false">&#x00029;</mo></mrow></math></span> truncated to bits</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>r</mi><mo>&#x0002C;</mo><mi>s</mi></mrow></math></span></td>
+<td>the signature</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<h2 id="reuse-collapses-it">reuse collapses it<a class="headerlink" href="#reuse-collapses-it" title="Permanent link">#</a></h2>
+<p>Two signatures <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mo stretchy="false">&#x00028;</mo><mi>r</mi><mo>&#x0002C;</mo><msub><mi>s</mi><mn>1</mn></msub><mo stretchy="false">&#x00029;</mo></mrow></math></span> and <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mo stretchy="false">&#x00028;</mo><mi>r</mi><mo>&#x0002C;</mo><msub><mi>s</mi><mn>2</mn></msub><mo stretchy="false">&#x00029;</mo></mrow></math></span> on hashes <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>z</mi><mn>1</mn></msub><mo>&#x02260;</mo><msub><mi>z</mi><mn>2</mn></msub></mrow></math></span> share the <em>same</em>
+<span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>r</mi></mrow></math></span> — which is the tell, since <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>r</mi></mrow></math></span> depends only on <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>k</mi></mrow></math></span>. Equal <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>r</mi></mrow></math></span> means equal <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>k</mi></mrow></math></span>.
+Subtract the two signing relations and <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>d</mi></mrow></math></span> drops out:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><msub><mi>s</mi><mn>1</mn></msub><mo>&#x02212;</mo><msub><mi>s</mi><mn>2</mn></msub><mo>&#x02261;</mo><msup><mi>k</mi><mrow><mo>&#x02212;</mo><mn>1</mn></mrow></msup><mspace width="0.167em" /><mo stretchy="false">&#x00028;</mo><msub><mi>z</mi><mn>1</mn></msub><mo>&#x02212;</mo><msub><mi>z</mi><mn>2</mn></msub><mo stretchy="false">&#x00029;</mo><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mi>n</mi></mrow><mo>&#x00029;</mo><mo>&#x0002E;</mo></mrow></math></div>
+<p>Solve for the nonce directly,</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>k</mi><mo>&#x02261;</mo><mo stretchy="false">&#x00028;</mo><msub><mi>z</mi><mn>1</mn></msub><mo>&#x02212;</mo><msub><mi>z</mi><mn>2</mn></msub><mo stretchy="false">&#x00029;</mo><mspace width="0.167em" /><mo stretchy="false">&#x00028;</mo><msub><mi>s</mi><mn>1</mn></msub><mo>&#x02212;</mo><msub><mi>s</mi><mn>2</mn></msub><msup><mo stretchy="false">&#x00029;</mo><mrow><mo>&#x02212;</mo><mn>1</mn></mrow></msup><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mi>n</mi></mrow><mo>&#x00029;</mo><mo>&#x0002C;</mo></mrow></math></div>
+<p>and back-substitute into either signature to recover the key:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>d</mi><mo>&#x02261;</mo><msup><mi>r</mi><mrow><mo>&#x02212;</mo><mn>1</mn></mrow></msup><mspace width="0.167em" /><mo stretchy="false">&#x00028;</mo><msub><mi>s</mi><mn>1</mn></msub><mi>k</mi><mo>&#x02212;</mo><msub><mi>z</mi><mn>1</mn></msub><mo stretchy="false">&#x00029;</mo><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mi>n</mi></mrow><mo>&#x00029;</mo><mspace width="0.278em" /><mo>&#x02261;</mo><mspace width="0.278em" /><mfrac><mrow><msub><mi>s</mi><mn>2</mn></msub><msub><mi>z</mi><mn>1</mn></msub><mo>&#x02212;</mo><msub><mi>s</mi><mn>1</mn></msub><msub><mi>z</mi><mn>2</mn></msub></mrow><mrow><mi>r</mi><mspace width="0.167em" /><mo stretchy="false">&#x00028;</mo><msub><mi>s</mi><mn>1</mn></msub><mo>&#x02212;</mo><msub><mi>s</mi><mn>2</mn></msub><mo stretchy="false">&#x00029;</mo></mrow></mfrac><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mi>n</mi></mrow><mo>&#x00029;</mo><mo>&#x0002E;</mo></mrow></math></div>
+<p>That last form is the one to memorise — given <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>r</mi></mrow></math></span>, two <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>s</mi></mrow></math></span> values and two
+hashes, it's a single modular division.</p>
+<figure class="codeblock"><figcaption><span class="fname">recover.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#recoverpy-1"> 1</a></span>
+<span class="normal"><a href="#recoverpy-2"> 2</a></span>
+<span class="normal"><a href="#recoverpy-3"> 3</a></span>
+<span class="normal"><a href="#recoverpy-4"> 4</a></span>
+<span class="normal"><a href="#recoverpy-5"> 5</a></span>
+<span class="normal"><a href="#recoverpy-6"> 6</a></span>
+<span class="normal"><a href="#recoverpy-7"> 7</a></span>
+<span class="normal"><a href="#recoverpy-8"> 8</a></span>
+<span class="normal"><a href="#recoverpy-9"> 9</a></span>
+<span class="normal"><a href="#recoverpy-10">10</a></span>
+<span class="normal"><a href="#recoverpy-11">11</a></span>
+<span class="normal"><a href="#recoverpy-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="recoverpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">hashlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">sha256</span>
+</span><span id="recoverpy-2"><span class="n">n</span>  <span class="o">=</span> <span class="mh">0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551</span>  <span class="c1"># secp256r1</span>
+</span><span id="recoverpy-3">
+</span><span id="recoverpy-4"><span class="k">def</span><span class="w"> </span><span class="nf">H</span><span class="p">(</span><span class="n">m</span><span class="p">):</span>  <span class="c1"># truncated hash -&gt; integer mod n</span>
+</span><span id="recoverpy-5">    <span class="k">return</span> <span class="nb">int</span><span class="o">.</span><span class="n">from_bytes</span><span class="p">(</span><span class="n">sha256</span><span class="p">(</span><span class="n">m</span><span class="p">)</span><span class="o">.</span><span class="n">digest</span><span class="p">(),</span> <span class="s2">&quot;big&quot;</span><span class="p">)</span> <span class="o">%</span> <span class="n">n</span>
+</span><span id="recoverpy-6">
+</span><span id="recoverpy-7"><span class="n">z1</span><span class="p">,</span> <span class="n">z2</span> <span class="o">=</span> <span class="n">H</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;transfer 1 coin&quot;</span><span class="p">),</span> <span class="n">H</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;transfer 9999 coins&quot;</span><span class="p">)</span>
+</span><span id="recoverpy-8"><span class="n">r</span><span class="p">,</span> <span class="n">s1</span><span class="p">,</span> <span class="n">s2</span> <span class="o">=</span> <span class="n">sig1</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">sig1</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">sig2</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="recoverpy-9">
+</span><span id="recoverpy-10"><span class="hll"><span class="n">k</span> <span class="o">=</span> <span class="p">(</span><span class="n">z1</span> <span class="o">-</span> <span class="n">z2</span><span class="p">)</span> <span class="o">*</span> <span class="nb">pow</span><span class="p">(</span><span class="n">s1</span> <span class="o">-</span> <span class="n">s2</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span> <span class="o">%</span> <span class="n">n</span>
+</span></span><span id="recoverpy-11"><span class="hll"><span class="n">d</span> <span class="o">=</span> <span class="p">(</span><span class="n">s1</span> <span class="o">*</span> <span class="n">k</span> <span class="o">-</span> <span class="n">z1</span><span class="p">)</span> <span class="o">*</span> <span class="nb">pow</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span> <span class="o">%</span> <span class="n">n</span>
+</span></span><span id="recoverpy-12"><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;d =&quot;</span><span class="p">,</span> <span class="nb">hex</span><span class="p">(</span><span class="n">d</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<div class="admonition tip">
+<p class="admonition-title">spotting it in the wild</p>
+<p>You don't need the source to know a nonce repeated — you need two signatures
+with an identical <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>r</mi></mrow></math></span>. Collect a handful, sort by <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>r</mi></mrow></math></span>, look for a collision.
+The same trick works across <em>different keys</em> if a bad RNG seeds them in lockstep.</p>
+</div>
+<h2 id="when-the-nonce-is-only-biased">when the nonce is only biased<a class="headerlink" href="#when-the-nonce-is-only-biased" title="Permanent link">#</a></h2>
+<p>Real leaks are rarely a clean repeat. More often <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>k</mi></mrow></math></span> is <em>short</em> — the top bits are
+zero — and one signature tells you nothing, but a few hundred do. This is the
+<strong>Hidden Number Problem</strong>: each signature is a noisy linear equation in <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>d</mi></mrow></math></span>,</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>d</mi><mo>&#x000B7;</mo><msub><mi>t</mi><mi>i</mi></msub><mo>&#x02212;</mo><msub><mi>u</mi><mi>i</mi></msub><mo>&#x02261;</mo><msub><mi>k</mi><mi>i</mi></msub><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mrow><mi>n</mi></mrow><mo>&#x00029;</mo><mo>&#x0002C;</mo><mspace width="2em" /><msub><mi>t</mi><mi>i</mi></msub><mo>&#x0003D;</mo><msub><mi>r</mi><mi>i</mi></msub><msubsup><mi>s</mi><mi>i</mi><mrow><mo>&#x02212;</mo><mn>1</mn></mrow></msubsup><mo>&#x0002C;</mo><mspace width="0.278em" /><msub><mi>u</mi><mi>i</mi></msub><mo>&#x0003D;</mo><msub><mi>z</mi><mi>i</mi></msub><msubsup><mi>s</mi><mi>i</mi><mrow><mo>&#x02212;</mo><mn>1</mn></mrow></msubsup><mo>&#x0002C;</mo></mrow></math></div>
+<p>where every <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>k</mi><mi>i</mi></msub></mrow></math></span> is small. Stack the equations as a lattice whose short vectors
+encode the answer:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>B</mi><mo>&#x0003D;</mo><mrow><mo stretchy="true" fence="true">&#x0005B;</mo><mtable><mtr><mtd><mi>n</mi></mtd><mtd><mn>0</mn></mtd><mtd><mo>&#x022EF;</mo></mtd><mtd><mn>0</mn></mtd></mtr><mtr><mtd><mn>0</mn></mtd><mtd><mi>n</mi></mtd><mtd><mo>&#x022EF;</mo></mtd><mtd><mn>0</mn></mtd></mtr><mtr><mtd><mo>&#x022EE;</mo></mtd><mtd /><mtd><mo>&#x022F1;</mo></mtd><mtd><mo>&#x022EE;</mo></mtd></mtr><mtr><mtd><msub><mi>t</mi><mn>1</mn></msub></mtd><mtd><msub><mi>t</mi><mn>2</mn></msub></mtd><mtd><mo>&#x022EF;</mo></mtd><mtd><mn>1</mn></mtd></mtr></mtable><mo stretchy="true" fence="true">&#x0005D;</mo></mrow></mrow></math></div>
+<p>Run <strong>LLL</strong> (or BKZ for tight bias), and the row closest to the origin spells out
+the <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>k</mi><mi>i</mi></msub></mrow></math></span> — and with them, <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>d</mi></mrow></math></span>. Two-thirds of a leaked nonce over ~80 signatures
+is plenty.<sup id="fnref:lll"><a class="footnote-ref" href="#fn:lll">1</a></sup></p>
+<details class="spoiler">
+<summary>the flag</summary>
+<p>Once you have <code class="highlight">d</code>, sign the challenge token yourself:
+<code class="highlight">segfault{n0nce_r3us3_1s_a_pr1v4te_k3y_l3ak}</code></p>
+</details>
+<div class="footnote">
+<hr>
+<ol>
+<li id="fn:lll">
+<p>The bridge from "biased nonce" to "lattice" is the part worth internalising:
+a bound on the unknown becomes a <em>short vector</em>, and short vectors are what LLL
+finds. Most ECDSA CTF crypto is some disguise over this one reduction.&#160;<a class="footnote-backref" href="#fnref:lll" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a><a class="row" href="/p/ret2libc-warmup/"><span class="row__date">2026-01-29</span><span class="row__tag">pwn</span><span class="row__title">ret2libc on a warm-up: stack smash to shell</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/anti-debug-bingo/"><span class="lbl">&#8249; newer</span>anti-debug bingo: five checks and how they fall</a><a class="next" href="/p/slab-uaf-modprobe/"><span class="lbl">older &#8250;</span>a slab use-after-free, from ioctl to root</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

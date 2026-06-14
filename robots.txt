@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://algoatson.github.io/sitemap.xml

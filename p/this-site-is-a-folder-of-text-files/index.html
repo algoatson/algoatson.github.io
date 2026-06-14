@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>this site is a folder of text files — algoatson.github.io</title>
+<meta name="description" content="how this blog is built, how to add a post, and a tour of every feature you get for free. Delete this post once you&#x27;ve read it.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="this site is a folder of text files — algoatson.github.io">
+<meta property="og:description" content="how this blog is built, how to add a post, and a tour of every feature you get for free. Delete this post once you&#x27;ve read it.">
+<meta property="og:url" content="https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/this-site-is-a-folder-of-text-files.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "this site is a folder of text files", "datePublished": "2026-01-05", "dateModified": "2026-01-05", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "how this blog is built, how to add a post, and a tour of every feature you get for free. Delete this post once you've read it.", "url": "https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/", "mainEntityOfPage": "https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/", "keywords": "meta, site"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>this site is a folder of text files</h1>
+  <div class="meta"><span>2026-01-05</span><span>4 min read</span><a class="tag" href="/tags/meta/">meta</a> <a class="tag" href="/tags/site/">site</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#adding-a-post">adding a post</a></li>
+<li><a href="#code-listings-are-the-whole-point">code listings are the whole point</a></li>
+<li><a href="#know-your-target">know your target</a></li>
+<li><a href="#the-grep-box">the grep box</a></li>
+<li><a href="#the-rest-of-markdown-works-too">the rest of Markdown works too</a></li>
+<li><a href="#hiding-the-flag">hiding the flag</a></li>
+<li><a href="#keyboard-driven-by-default">keyboard-driven by default</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>This is a seed post. It exists to show you what the site can do and how to write
+for it, then you delete it. Everything below renders from plain Markdown.</p>
+<blockquote>
+<p>The whole site is <code class="highlight">posts/*.md</code> + one <code class="highlight">build.py</code>. No node, no framework, no
+account, no tracker. Run the script, get a folder of static HTML. That's it.</p>
+</blockquote>
+<h2 id="adding-a-post">adding a post<a class="headerlink" href="#adding-a-post" title="Permanent link">#</a></h2>
+<p>Drop a Markdown file in <code class="highlight">posts/</code>. Name it <code class="highlight">YYYY-MM-DD-some-slug.md</code>. Put a small
+block of metadata at the top — that's the <code class="highlight">---</code> fenced part — and write below it.</p>
+<figure class="codeblock"><figcaption><span class="fname">posts/2026-01-05-example.md</span><span class="lang">yaml</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#posts2026-01-05-examplemd-1">1</a></span>
+<span class="normal"><a href="#posts2026-01-05-examplemd-2">2</a></span>
+<span class="normal"><a href="#posts2026-01-05-examplemd-3">3</a></span>
+<span class="normal"><a href="#posts2026-01-05-examplemd-4">4</a></span>
+<span class="normal"><a href="#posts2026-01-05-examplemd-5">5</a></span>
+<span class="normal"><a href="#posts2026-01-05-examplemd-6">6</a></span>
+<span class="normal"><a href="#posts2026-01-05-examplemd-7">7</a></span>
+<span class="normal"><a href="#posts2026-01-05-examplemd-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="posts2026-01-05-examplemd-1"><span class="nn">---</span>
+</span><span id="posts2026-01-05-examplemd-2"><span class="nt">title</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">this site is a folder of text files</span>
+</span><span id="posts2026-01-05-examplemd-3"><span class="nt">date</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2026-01-05</span>
+</span><span id="posts2026-01-05-examplemd-4"><span class="nt">tags</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">meta</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">site</span><span class="p p-Indicator">]</span>
+</span><span id="posts2026-01-05-examplemd-5"><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">one line for the index, search, and the RSS feed.</span>
+</span><span id="posts2026-01-05-examplemd-6"><span class="nn">---</span>
+</span><span id="posts2026-01-05-examplemd-7">
+</span><span id="posts2026-01-05-examplemd-8"><span class="l l-Scalar l-Scalar-Plain">Your writeup starts here. Just Markdown.</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Then run the build:</p>
+<figure class="codeblock"><figcaption><span class="fname">rebuild + preview locally</span><span class="lang">sh</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#rebuild-preview-locally-1">1</a></span>
+<span class="normal"><a href="#rebuild-preview-locally-2">2</a></span>
+<span class="normal"><a href="#rebuild-preview-locally-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="rebuild-preview-locally-1">python3<span class="w"> </span>build.py<span class="w">            </span><span class="c1"># compiles posts/ + pages/ into dist/</span>
+</span><span id="rebuild-preview-locally-2">python3<span class="w"> </span>build.py<span class="w"> </span>--serve<span class="w">    </span><span class="c1"># ...and serves it at http://localhost:8000</span>
+</span><span id="rebuild-preview-locally-3">python3<span class="w"> </span>build.py<span class="w"> </span>--drafts<span class="w">   </span><span class="c1"># also include posts marked draft: true</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>That's the entire workflow. Edit text, run script, refresh.</p>
+<h2 id="code-listings-are-the-whole-point">code listings are the whole point<a class="headerlink" href="#code-listings-are-the-whole-point" title="Permanent link">#</a></h2>
+<p>A blog like this lives and dies by how code reads. Fences render as listings
+with a filename, a language tag, line numbers, and a copy button. You can
+highlight specific lines to point at the thing that matters:</p>
+<figure class="codeblock"><figcaption><span class="fname">vuln.c</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#vulnc-1">1</a></span>
+<span class="normal"><a href="#vulnc-2">2</a></span>
+<span class="normal"><a href="#vulnc-3">3</a></span>
+<span class="normal"><a href="#vulnc-4">4</a></span>
+<span class="normal"><a href="#vulnc-5">5</a></span>
+<span class="normal"><a href="#vulnc-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="vulnc-1"><span class="kt">int</span><span class="w"> </span><span class="nf">authenticate</span><span class="p">(</span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="vulnc-2"><span class="w">    </span><span class="kt">char</span><span class="w"> </span><span class="n">passwd</span><span class="p">[</span><span class="mi">16</span><span class="p">];</span>
+</span><span id="vulnc-3"><span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">authed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+</span><span id="vulnc-4"><span class="hll"><span class="w">    </span><span class="n">strcpy</span><span class="p">(</span><span class="n">passwd</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">);</span><span class="w">   </span><span class="c1">// no bounds check</span>
+</span></span><span id="vulnc-5"><span class="hll"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">authed</span><span class="p">;</span><span class="w">           </span><span class="c1">// ...but `authed` sits right above `passwd`</span>
+</span></span><span id="vulnc-6"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Highlighting is done with weight and inverse video, not color — the entire
+palette is greyscale on purpose. "Syntax highlighting" here means <em>emphasis</em>,
+the way a disassembler bolds a mnemonic, not a rainbow.</p>
+<div class="admonition note">
+<p class="admonition-title">why monochrome</p>
+<p>Acid-green-on-black is the single most over-used look in this scene. Going
+strictly black-and-white reads as a deliberate choice instead of a default,
+and it makes your screenshots and diagrams sit in the page instead of
+fighting it. If you disagree, set <code class="highlight">accent</code> in <code class="highlight">site.json</code> and it'll thread a
+single color through links and highlights.</p>
+</div>
+<h2 id="know-your-target">know your target<a class="headerlink" href="#know-your-target" title="Permanent link">#</a></h2>
+<p>Every pwn writeup opens with the same question: what are we even looking at?
+There's a block for that — it renders a <code class="highlight">checksec</code>-style panel, binary facts on
+one side, mitigations as a greyscale checklist on the other.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./challenge</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.35 (Ubuntu glibc 2.35-0ubuntu3)</dd></div><div><dt>category</dt><dd>pwn · 487 pts</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">RELRO</span><span class="lead" aria-hidden="true"></span><span class="mv">full</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">Canary</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">ASLR</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li></ul></div></figure>
+<p>Any <code class="highlight">key: value</code> line is a fact; values that read like <code class="highlight">on</code> / <code class="highlight">off</code> / <code class="highlight">full</code> /
+<code class="highlight">partial</code> / <code class="highlight">none</code> become mitigation rows with a ✓ or ✗. The <code class="highlight">file:</code> (or
+<code class="highlight">binary:</code>) line becomes the title. No color — the enabled walls sit back in grey
+and a disabled mitigation, your way in, stays bright.</p>
+<h2 id="the-grep-box">the grep box<a class="headerlink" href="#the-grep-box" title="Permanent link">#</a></h2>
+<p>Hit <code class="highlight">/</code> (or <code class="highlight">Ctrl-P</code>, or click <strong>grep</strong>) and you get an fzf-style fuzzy finder
+over every post — title, tags, <em>and</em> full body text. It scores subsequence
+matches, rewards consecutive hits and word boundaries, and shows a snippet of
+where your query landed. Arrow keys or <code class="highlight">Ctrl-j</code>/<code class="highlight">Ctrl-k</code> to move, <code class="highlight">Enter</code> to
+open, <code class="highlight">Esc</code> to bail. Try searching this site for <code class="highlight">heap</code> or <code class="highlight">vm</code>.</p>
+<h2 id="the-rest-of-markdown-works-too">the rest of Markdown works too<a class="headerlink" href="#the-rest-of-markdown-works-too" title="Permanent link">#</a></h2>
+<p>Tables:</p>
+<table>
+<thead>
+<tr>
+<th>technique</th>
+<th>primitive it gives you</th>
+<th>mitigation that hurts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tcache poisoning</td>
+<td>near-arbitrary write</td>
+<td>safe-linking, glibc≥2.32</td>
+</tr>
+<tr>
+<td>ret2libc</td>
+<td>call any libc function</td>
+<td>ASLR, PIE</td>
+</tr>
+<tr>
+<td>format string</td>
+<td>read/write where you point</td>
+<td><code class="highlight">-Wformat</code>, FORTIFY</td>
+</tr>
+</tbody>
+</table>
+<p>Footnotes for the asides that would otherwise wreck a sentence.<sup id="fnref:aside"><a class="footnote-ref" href="#fn:aside">1</a></sup>
+Task lists, for tracking a target:</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> dump the binary</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> find the check</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> actually beat the check</li>
+</ul>
+<h2 id="hiding-the-flag">hiding the flag<a class="headerlink" href="#hiding-the-flag" title="Permanent link">#</a></h2>
+<p>Half of writing a CTF post is <em>not</em> spoiling it. You want the walkthrough public
+but the flag folded away until the reader decides they want it. That's a spoiler
+block:</p>
+<details class="spoiler">
+<summary>the flag</summary>
+<p><code class="highlight">segfault{y0u_r34d_th3_wh0le_th1ng}</code> — recovered by walking the tcache
+<code class="highlight">next</code> pointer to <code class="highlight">__free_hook</code>. Boring once you've seen the mechanic. That's
+the point.</p>
+</details>
+<p>It's a plain <code class="highlight">&lt;details&gt;</code>, so it still folds shut with JavaScript off. Use <code class="highlight">???</code>
+for any collapsible aside and <code class="highlight">???+</code> to start it open; the first word
+(<code class="highlight">spoiler</code>, <code class="highlight">note</code>, <code class="highlight">warning</code>, …) picks the style.</p>
+<p>While you read, two things track you quietly: on a wide screen the contents
+list pins to the right and marks the section you're in, and the hairline along
+the top of the window is a reading-progress bar. Both are JavaScript sugar —
+kill it and the post is still a clean document. Posts that share a tag also grow
+a small <strong>related</strong> list at the foot.</p>
+<h2 id="keyboard-driven-by-default">keyboard-driven by default<a class="headerlink" href="#keyboard-driven-by-default" title="Permanent link">#</a></h2>
+<p><code class="highlight">j</code>/<code class="highlight">k</code> move down the index, <code class="highlight">g g</code> jumps to top, <code class="highlight">G</code> to bottom, <code class="highlight">Enter</code> opens
+the selected post, <code class="highlight">t</code> flips to light mode, and <code class="highlight">?</code> shows every shortcut. None
+of it is required — kill JavaScript entirely and the site is still a clean,
+readable document. The keys are a bonus for people who live in the terminal.</p>
+<p>That's the tour. Delete this file, write something real, run the script.</p>
+<div class="footnote">
+<hr>
+<ol>
+<li id="fn:aside">
+<p>Like this one. Footnotes render at the bottom and link both ways, so a
+reader can dip into the tangent and get back without losing their place.&#160;<a class="footnote-backref" href="#fnref:aside" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/the-rendering-reference/"><span class="row__date">2026-06-10</span><span class="row__tag">meta</span><span class="row__title">the rendering reference</span><span class="row__min">7 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/tcache-poisoning-explained/"><span class="lbl">&#8249; newer</span>tcache poisoning, explained like you&#x27;ll have to use it</a><a class="next" href="/p/advent-of-pwn/"><span class="lbl">older &#8250;</span>advent of pwn 2025</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

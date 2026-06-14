@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>one keybind to checksec everything — algoatson.github.io</title>
+<meta name="description" content="A small workflow I paste into every CTF box — pull every binary&#x27;s mitigations into one scannable list, run it from a single keybind, and stop re-typing checksec for the hundredth time. Glue, not genius.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/checksec-everything/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="one keybind to checksec everything — algoatson.github.io">
+<meta property="og:description" content="A small workflow I paste into every CTF box — pull every binary&#x27;s mitigations into one scannable list, run it from a single keybind, and stop re-typing checksec for the hundredth time. Glue, not genius.">
+<meta property="og:url" content="https://algoatson.github.io/p/checksec-everything/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/checksec-everything.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "one keybind to checksec everything", "datePublished": "2026-05-19", "dateModified": "2026-05-19", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A small workflow I paste into every CTF box — pull every binary's mitigations into one scannable list, run it from a single keybind, and stop re-typing checksec for the hundredth time. Glue, not genius.", "url": "https://algoatson.github.io/p/checksec-everything/", "mainEntityOfPage": "https://algoatson.github.io/p/checksec-everything/", "keywords": "tooling, pwn, ctf"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>one keybind to checksec everything</h1>
+  <div class="meta"><span>2026-05-19</span><span>3 min read</span><a class="tag" href="/tags/tooling/">tooling</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/ctf/">ctf</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-one-liner">the one-liner</a></li>
+<li><a href="#wiring-it-to-a-key">wiring it to a key</a></li>
+<li><a href="#the-version-that-earns-its-keep">the version that earns its keep</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>First question on a new box is always the same: of the dozen binaries in this
+challenge, which one is the soft target? The answer is <code class="highlight">checksec</code> — run once per
+file, read all at once. So I stopped running it by hand.</p>
+<h2 id="the-one-liner">the one-liner<a class="headerlink" href="#the-one-liner" title="Permanent link">#</a></h2>
+<p>Find every ELF under the current tree and line their mitigations up:</p>
+<figure class="codeblock"><figcaption><span class="fname">checkall.sh</span><span class="lang">bash</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#checkallsh-1">1</a></span>
+<span class="normal"><a href="#checkallsh-2">2</a></span>
+<span class="normal"><a href="#checkallsh-3">3</a></span>
+<span class="normal"><a href="#checkallsh-4">4</a></span>
+<span class="normal"><a href="#checkallsh-5">5</a></span>
+<span class="normal"><a href="#checkallsh-6">6</a></span>
+<span class="normal"><a href="#checkallsh-7">7</a></span>
+<span class="normal"><a href="#checkallsh-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="checkallsh-1"><span class="ch">#!/usr/bin/env bash</span>
+</span><span id="checkallsh-2"><span class="c1"># every ELF under $1 (default .), mitigations in one table</span>
+</span><span id="checkallsh-3"><span class="hll">find<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">1</span><span class="k">:-</span><span class="p">.</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>-type<span class="w"> </span>f<span class="w"> </span>-exec<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;file &quot;$1&quot; | grep -q ELF&#39;</span><span class="w"> </span>_<span class="w"> </span><span class="o">{}</span><span class="w"> </span><span class="se">\;</span><span class="w"> </span>-print<span class="w"> </span><span class="se">\</span>
+</span></span><span id="checkallsh-4"><span class="w">  </span><span class="p">|</span><span class="w"> </span><span class="k">while</span><span class="w"> </span><span class="nb">read</span><span class="w"> </span>-r<span class="w"> </span>bin<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+</span><span id="checkallsh-5"><span class="w">      </span><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%-28s &#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$bin</span><span class="s2">&quot;</span>
+</span><span id="checkallsh-6"><span class="w">      </span>checksec<span class="w"> </span>--file<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$bin</span><span class="s2">&quot;</span><span class="w"> </span>--format<span class="o">=</span>json<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="se">\</span>
+</span><span id="checkallsh-7"><span class="w">        </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.[] | &quot;\(.relro) \(.canary) \(.nx) \(.pie)&quot;&#39;</span>
+</span><span id="checkallsh-8"><span class="w">    </span><span class="k">done</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>column<span class="w"> </span>-t
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Pointed at a challenge directory it turns "twelve unknown files" into a glance:</p>
+<figure class="cast"><figcaption><span class="fname">checkall.sh on a fresh box</span><span class="lang">cast</span></figcaption><div class="cast__svg"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="740" height="238.81"><rect width="740" height="238.81" rx="0" ry="0" class="a"/><svg height="238.81" viewBox="0 0 74 23.881" width="740" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><style>@keyframes f{0%{transform:translateX(0)}9.1%{transform:translateX(-74px)}20.5%{transform:translateX(-148px)}31.8%{transform:translateX(-222px)}38.6%{transform:translateX(-296px)}45.5%{transform:translateX(-370px)}52.3%{transform:translateX(-444px)}59.1%{transform:translateX(-518px)}65.9%{transform:translateX(-592px)}77.3%{transform:translateX(-666px)}to{transform:translateX(-740px)}}.a{fill:#2d2d2d}.c{fill:#bfbfbf;white-space:pre}</style><g font-family="Monaco,Consolas,Menlo,'Bitstream Vera Sans Mono','Powerline Symbols',monospace" font-size="1.67"><defs><symbol id="1"><text y="1.67" class="c">$</text></symbol><symbol id="2"><text y="1.67" class="c">$</text><text x="2.004" y="1.67" class="c">checksec</text><text x="11.022" y="1.67" class="c">--file=./challenge</text></symbol><symbol id="3"><text y="1.67" class="c">[*]</text><text x="4.008" y="1.67" class="c">&apos;/ctf/challenge&apos;</text></symbol><symbol id="4"><text x="4.008" y="1.67" class="c">Arch:</text><text x="14.028" y="1.67" class="c">amd64-64-little</text></symbol><symbol id="5"><text x="4.008" y="1.67" class="c">RELRO:</text><text x="14.028" y="1.67" class="c">Full</text><text x="19.038" y="1.67" class="c">RELRO</text></symbol><symbol id="6"><text x="4.008" y="1.67" class="c">Stack:</text><text x="14.028" y="1.67" class="c">No</text><text x="17.034" y="1.67" class="c">canary</text><text x="24.048" y="1.67" class="c">found</text></symbol><symbol id="7"><text x="4.008" y="1.67" class="c">NX:</text><text x="14.028" y="1.67" class="c">NX</text><text x="17.034" y="1.67" class="c">enabled</text></symbol><symbol id="8"><text x="4.008" y="1.67" class="c">PIE:</text><text x="14.028" y="1.67" class="c">PIE</text><text x="18.036" y="1.67" class="c">enabled</text></symbol><symbol id="a"><path fill="transparent" d="M0 0h74v11H0z"/></symbol><symbol id="b"><path fill="#757575" d="M0 0h1.102v2.171H0z"/></symbol></defs><path class="a" d="M0 0h74v23.881H0z"/><g style="animation-duration:4.4s;animation-iteration-count:infinite;animation-name:f;animation-timing-function:steps(1,end)"><svg width="814"><svg><use xlink:href="#a"/><use xlink:href="#b" x="-.004"/></svg><svg x="74"><use xlink:href="#a"/><use xlink:href="#b" x="1.996"/><use xlink:href="#1"/></svg><svg x="148"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="2.146"/><use xlink:href="#2"/></svg><svg x="222"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="4.317"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/></svg><svg x="296"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="6.488"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/></svg><svg x="370"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="8.659"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/></svg><svg x="444"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="10.83"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/></svg><svg x="518"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="13.001"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/><use xlink:href="#7" y="10.855"/></svg><svg x="592"><use xlink:href="#a"/><use xlink:href="#b" x="-.004" y="15.172"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/><use xlink:href="#7" y="10.855"/><use xlink:href="#8" y="13.026"/></svg><svg x="666"><use xlink:href="#a"/><use xlink:href="#b" x="1.996" y="15.172"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/><use xlink:href="#7" y="10.855"/><use xlink:href="#8" y="13.026"/><use xlink:href="#1" y="15.197"/></svg><svg x="740"><use xlink:href="#a"/><use xlink:href="#b" x="1.996" y="15.172"/><use xlink:href="#2"/><use xlink:href="#3" y="2.171"/><use xlink:href="#4" y="4.342"/><use xlink:href="#5" y="6.513"/><use xlink:href="#6" y="8.684"/><use xlink:href="#7" y="10.855"/><use xlink:href="#8" y="13.026"/><use xlink:href="#1" y="15.197"/></svg></svg></g></g></svg></svg></div></figure>
+<p>The one with <strong>no canary and partial RELRO</strong> is where I start. Here it is as the
+panel I'd paste into the writeup:</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./vuln</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div></dl><ul class="target__mits"><li class="m-meh"><span class="g" aria-hidden="true">≈</span><span class="mk">RELRO</span><span class="lead" aria-hidden="true"></span><span class="mv">partial</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">Canary</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li></ul></div></figure>
+<h2 id="wiring-it-to-a-key">wiring it to a key<a class="headerlink" href="#wiring-it-to-a-key" title="Permanent link">#</a></h2>
+<p>A script I have to remember to run is a script I won't run. So it goes behind one
+tmux binding, scoped to the current pane's directory:</p>
+<figure class="codeblock"><figcaption><span class="fname">~/.tmux.conf</span><span class="lang">bash</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#tmuxconf-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="tmuxconf-1">bind-key<span class="w"> </span>C-k<span class="w"> </span>run-shell<span class="w"> </span><span class="s1">&#39;tmux display-popup -E &quot;checkall.sh #{pane_current_path}&quot;&#39;</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">prefix C-k</code> and the table pops over whatever I'm doing, no context switch. The
+muscle memory is the whole point — five seconds saved a hundred times is the
+difference between checking and <em>assuming</em>.</p>
+<h2 id="the-version-that-earns-its-keep">the version that earns its keep<a class="headerlink" href="#the-version-that-earns-its-keep" title="Permanent link">#</a></h2>
+<p>The shell one-liner is fine until a corpus has 300 files and you want it sorted by
+"easiest first." At that point it graduates to pwntools, where <code class="highlight">ELF</code> already
+parses the mitigations and I can rank them:</p>
+<figure class="codeblock"><figcaption><span class="fname">checkall.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#checkallpy-1"> 1</a></span>
+<span class="normal"><a href="#checkallpy-2"> 2</a></span>
+<span class="normal"><a href="#checkallpy-3"> 3</a></span>
+<span class="normal"><a href="#checkallpy-4"> 4</a></span>
+<span class="normal"><a href="#checkallpy-5"> 5</a></span>
+<span class="normal"><a href="#checkallpy-6"> 6</a></span>
+<span class="normal"><a href="#checkallpy-7"> 7</a></span>
+<span class="normal"><a href="#checkallpy-8"> 8</a></span>
+<span class="normal"><a href="#checkallpy-9"> 9</a></span>
+<span class="normal"><a href="#checkallpy-10">10</a></span>
+<span class="normal"><a href="#checkallpy-11">11</a></span>
+<span class="normal"><a href="#checkallpy-12">12</a></span>
+<span class="normal"><a href="#checkallpy-13">13</a></span>
+<span class="normal"><a href="#checkallpy-14">14</a></span>
+<span class="normal"><a href="#checkallpy-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="checkallpy-1"><span class="kn">import</span><span class="w"> </span><span class="nn">sys</span><span class="o">,</span><span class="w"> </span><span class="nn">glob</span>
+</span><span id="checkallpy-2"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="n">ELF</span><span class="p">,</span> <span class="n">context</span>
+</span><span id="checkallpy-3"><span class="n">context</span><span class="o">.</span><span class="n">log_level</span> <span class="o">=</span> <span class="s2">&quot;error&quot;</span>
+</span><span id="checkallpy-4">
+</span><span id="checkallpy-5"><span class="k">def</span><span class="w"> </span><span class="nf">softness</span><span class="p">(</span><span class="n">e</span><span class="p">):</span>                      <span class="c1"># higher = easier target</span>
+</span><span id="checkallpy-6">    <span class="k">return</span> <span class="p">(</span><span class="ow">not</span> <span class="n">e</span><span class="o">.</span><span class="n">canary</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="ow">not</span> <span class="n">e</span><span class="o">.</span><span class="n">pie</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">relro</span> <span class="o">!=</span> <span class="s2">&quot;Full&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="ow">not</span> <span class="n">e</span><span class="o">.</span><span class="n">nx</span><span class="p">)</span>
+</span><span id="checkallpy-7">
+</span><span id="checkallpy-8"><span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="checkallpy-9"><span class="hll"><span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">/**/*&quot;</span><span class="p">,</span> <span class="n">recursive</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+</span></span><span id="checkallpy-10"><span class="hll">    <span class="k">try</span><span class="p">:</span> <span class="n">e</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">checksec</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span></span><span id="checkallpy-11"><span class="hll">    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span> <span class="k">continue</span>
+</span></span><span id="checkallpy-12">    <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">softness</span><span class="p">(</span><span class="n">e</span><span class="p">),</span> <span class="n">path</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">canary</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">pie</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">relro</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">nx</span><span class="p">))</span>
+</span><span id="checkallpy-13">
+</span><span id="checkallpy-14"><span class="k">for</span> <span class="n">s</span><span class="p">,</span> <span class="n">path</span><span class="p">,</span> <span class="o">*</span><span class="n">m</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+</span><span id="checkallpy-15">    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">s</span><span class="si">}</span><span class="s2">  </span><span class="si">{</span><span class="n">path</span><span class="si">:</span><span class="s2">30</span><span class="si">}</span><span class="s2">  canary=</span><span class="si">{</span><span class="n">m</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> pie=</span><span class="si">{</span><span class="n">m</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> relro=</span><span class="si">{</span><span class="n">m</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="si">}</span><span class="s2"> nx=</span><span class="si">{</span><span class="n">m</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The diff from "prints a table" to "ranks the table" is small and worth it:</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">what the rewrite bought</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#what-the-rewrite-bought-1">1</a></span>
+<span class="normal"><a href="#what-the-rewrite-bought-2">2</a></span>
+<span class="normal"><a href="#what-the-rewrite-bought-3">3</a></span>
+<span class="normal"><a href="#what-the-rewrite-bought-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="what-the-rewrite-bought-1"><span class="gd">-checksec --file=&quot;$bin&quot; --format=json | jq ...   # one line per file, unsorted</span>
+</span><span id="what-the-rewrite-bought-2"><span class="gd">-# eyeball twelve rows</span>
+</span><span id="what-the-rewrite-bought-3"><span class="gi">+softness = (not canary) + (not pie) + (relro != Full) + (not nx)</span>
+</span><span id="what-the-rewrite-bought-4"><span class="gi">+# sorted; the top row is the soft target</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<div class="admonition tip">
+<p class="admonition-title">don't trust a green wall</p>
+<p><code class="highlight">checksec</code> reads the binary, not the deployment. Full RELRO with a stack leak
+is still game over, and a "secure" wall just means the bug is somewhere subtler
+than the linker flags. The table tells you where to <em>look first</em>, not where to
+stop.</p>
+</div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> enumerate every ELF in the tree</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> one keybind, scoped to the pane</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> rank by exploitability, not filename</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> cache results per-file hash so re-runs are instant<sup id="fnref:cache"><a class="footnote-ref" href="#fn:cache">1</a></sup></li>
+</ul>
+<div class="footnote">
+<hr>
+<ol>
+<li id="fn:cache">
+<p>The obvious next increment: key a tiny on-disk cache by the file's
+<code class="highlight">sha1</code>, so a 300-binary corpus only pays the parse cost once. Left undone
+because the popup already feels instant under ~50 files, which is every CTF I
+actually play.&#160;<a class="footnote-backref" href="#fnref:cache" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/finding-gadgets/"><span class="row__date">2026-05-12</span><span class="row__tag">pwn</span><span class="row__title">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</span><span class="row__min">5 min</span></a><a class="row" href="/p/ret2libc-warmup/"><span class="row__date">2026-01-29</span><span class="row__tag">pwn</span><span class="row__title">ret2libc on a warm-up: stack smash to shell</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/pwntools-cookbook/"><span class="lbl">&#8249; newer</span>a pwntools cookbook</a><a class="next" href="/p/finding-gadgets/"><span class="lbl">older &#8250;</span>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

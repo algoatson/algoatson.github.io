@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>tcache poisoning, explained like you&#x27;ll have to use it — algoatson.github.io</title>
+<meta name="description" content="a from-scratch walk through the most reliable beginner heap primitive — what the tcache is, why poisoning works, and how safe-linking changed the recipe. Educational target, not a real CVE.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/tcache-poisoning-explained/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="tcache poisoning, explained like you&#x27;ll have to use it — algoatson.github.io">
+<meta property="og:description" content="a from-scratch walk through the most reliable beginner heap primitive — what the tcache is, why poisoning works, and how safe-linking changed the recipe. Educational target, not a real CVE.">
+<meta property="og:url" content="https://algoatson.github.io/p/tcache-poisoning-explained/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/tcache-poisoning-explained.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "tcache poisoning, explained like you'll have to use it", "datePublished": "2026-01-18", "dateModified": "2026-01-18", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "a from-scratch walk through the most reliable beginner heap primitive — what the tcache is, why poisoning works, and how safe-linking changed the recipe. Educational target, not a real CVE.", "url": "https://algoatson.github.io/p/tcache-poisoning-explained/", "mainEntityOfPage": "https://algoatson.github.io/p/tcache-poisoning-explained/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>tcache poisoning, explained like you&#x27;ll have to use it</h1>
+  <div class="meta"><span>2026-01-18</span><span>4 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-allocator-in-one-paragraph">the allocator, in one paragraph</a></li>
+<li><a href="#the-toy">the toy</a></li>
+<li><a href="#the-poison">the poison</a></li>
+<li><a href="#then-glibc-moved-the-cheese">then glibc moved the cheese</a></li>
+<li><a href="#what-to-actually-take-away">what to actually take away</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Every heap writeup I read when I started skipped the part I actually needed: the
+<em>why</em>. They'd say "now poison the tcache" like that was a sentence a human could
+parse. This is the post I wish I'd had — built around a deliberately vulnerable
+toy, not a real CVE, so you can reproduce every step yourself.</p>
+<h2 id="the-allocator-in-one-paragraph">the allocator, in one paragraph<a class="headerlink" href="#the-allocator-in-one-paragraph" title="Permanent link">#</a></h2>
+<p>glibc's <code class="highlight">malloc</code> keeps freed chunks around to hand back fast. The fastest of
+these caches is the <strong>tcache</strong>: a per-thread, per-size singly-linked list. Free a
+chunk, it goes on the front of the list for its size. Allocate that size again,
+you get the front chunk back. The list is threaded through the freed chunks
+themselves — the first 8 bytes of a free chunk's data area hold the <code class="highlight">next</code>
+pointer.</p>
+<p>That last sentence is the entire vulnerability surface. The link lives <em>inside
+memory you used to own.</em> If you can write to a freed chunk, you can rewrite
+<code class="highlight">next</code>.</p>
+<h2 id="the-toy">the toy<a class="headerlink" href="#the-toy" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="fname">note.c — the vulnerable bits</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#notec-the-vulnerable-bits-1"> 1</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-2"> 2</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-3"> 3</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-4"> 4</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-5"> 5</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-6"> 6</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-7"> 7</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-8"> 8</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-9"> 9</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-10">10</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-11">11</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-12">12</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-13">13</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-14">14</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-15">15</a></span>
+<span class="normal"><a href="#notec-the-vulnerable-bits-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="notec-the-vulnerable-bits-1"><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">notes</span><span class="p">[</span><span class="mi">8</span><span class="p">];</span>
+</span><span id="notec-the-vulnerable-bits-2">
+</span><span id="notec-the-vulnerable-bits-3"><span class="kt">void</span><span class="w"> </span><span class="nf">edit</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="kt">size_t</span><span class="w"> </span><span class="n">n</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="notec-the-vulnerable-bits-4"><span class="w">    </span><span class="n">memcpy</span><span class="p">(</span><span class="n">notes</span><span class="p">[</span><span class="n">i</span><span class="p">],</span><span class="w"> </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">);</span><span class="w">     </span><span class="c1">// no check that notes[i] is still live</span>
+</span><span id="notec-the-vulnerable-bits-5"><span class="p">}</span>
+</span><span id="notec-the-vulnerable-bits-6">
+</span><span id="notec-the-vulnerable-bits-7"><span class="kt">void</span><span class="w"> </span><span class="nf">delete</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="notec-the-vulnerable-bits-8"><span class="w">    </span><span class="n">free</span><span class="p">(</span><span class="n">notes</span><span class="p">[</span><span class="n">i</span><span class="p">]);</span>
+</span><span id="notec-the-vulnerable-bits-9"><span class="hll"><span class="w">    </span><span class="cm">/* notes[i] = NULL;  &lt;-- the missing line that makes this a UAF */</span>
+</span></span><span id="notec-the-vulnerable-bits-10"><span class="p">}</span>
+</span><span id="notec-the-vulnerable-bits-11">
+</span><span id="notec-the-vulnerable-bits-12"><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="nf">create</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">n</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="notec-the-vulnerable-bits-13"><span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">next_free_slot</span><span class="p">();</span>
+</span><span id="notec-the-vulnerable-bits-14"><span class="w">    </span><span class="n">notes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="n">n</span><span class="p">);</span><span class="w">         </span><span class="c1">// tcache hands back our poisoned chunk</span>
+</span><span id="notec-the-vulnerable-bits-15"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">notes</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+</span><span id="notec-the-vulnerable-bits-16"><span class="hll"><span class="p">}</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The bug is boring and common: <code class="highlight">delete()</code> frees but never nulls the pointer, so
+<code class="highlight">edit()</code> can still write through it. That's a use-after-free, and a UAF on a
+tcache'd chunk is a write to the <code class="highlight">next</code> link.</p>
+<h2 id="the-poison">the poison<a class="headerlink" href="#the-poison" title="Permanent link">#</a></h2>
+<p>The plan is three moves:</p>
+<ol>
+<li><strong>Free a chunk</strong> so it lands in the tcache. Its <code class="highlight">next</code> is whatever was there
+   before (often <code class="highlight">NULL</code> if the list was empty).</li>
+<li><strong>Write through the dangling pointer</strong>, overwriting <code class="highlight">next</code> with the address
+   you want <code class="highlight">malloc</code> to eventually return.</li>
+<li><strong>Allocate twice.</strong> The first <code class="highlight">malloc</code> hands back the chunk you freed; the
+   second follows your forged <code class="highlight">next</code> and hands back <em>your chosen address</em> as if
+   it were a fresh allocation.</li>
+</ol>
+<figure class="codeblock"><figcaption><span class="fname">tcache list, before and after the overwrite</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#tcache-list-before-and-after-the-overwrite-1">1</a></span>
+<span class="normal"><a href="#tcache-list-before-and-after-the-overwrite-2">2</a></span>
+<span class="normal"><a href="#tcache-list-before-and-after-the-overwrite-3">3</a></span>
+<span class="normal"><a href="#tcache-list-before-and-after-the-overwrite-4">4</a></span>
+<span class="normal"><a href="#tcache-list-before-and-after-the-overwrite-5">5</a></span>
+<span class="normal"><a href="#tcache-list-before-and-after-the-overwrite-6">6</a></span>
+<span class="normal"><a href="#tcache-list-before-and-after-the-overwrite-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="tcache-list-before-and-after-the-overwrite-1"> before:   head -&gt; [chunkA | next=0x0]
+</span><span id="tcache-list-before-and-after-the-overwrite-2">
+</span><span id="tcache-list-before-and-after-the-overwrite-3"> overwrite chunkA.next with &amp;target:
+</span><span id="tcache-list-before-and-after-the-overwrite-4">           head -&gt; [chunkA | next=&amp;target]
+</span><span id="tcache-list-before-and-after-the-overwrite-5">
+</span><span id="tcache-list-before-and-after-the-overwrite-6"> malloc() #1 returns chunkA, list head becomes &amp;target
+</span><span id="tcache-list-before-and-after-the-overwrite-7"> malloc() #2 returns &amp;target   &lt;-- arbitrary allocation
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Now you own a pointer to an address you picked. Point it at a
+<code class="highlight">__free_hook</code>, a GOT entry, a return address on a leaked stack — whatever your
+target's mitigations leave standing — and you've converted a missing <code class="highlight">NULL</code>
+into control flow.<sup id="fnref:where"><a class="footnote-ref" href="#fn:where">1</a></sup></p>
+<h2 id="then-glibc-moved-the-cheese">then glibc moved the cheese<a class="headerlink" href="#then-glibc-moved-the-cheese" title="Permanent link">#</a></h2>
+<p>Around glibc 2.32 the <code class="highlight">next</code> pointer stopped being a raw address. <strong>Safe-linking</strong>
+XORs it with a value derived from the chunk's own location:</p>
+<figure class="codeblock"><figcaption><span class="fname">how safe-linking mangles the pointer (glibc)</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#how-safe-linking-mangles-the-pointer-glibc-1">1</a></span>
+<span class="normal"><a href="#how-safe-linking-mangles-the-pointer-glibc-2">2</a></span>
+<span class="normal"><a href="#how-safe-linking-mangles-the-pointer-glibc-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="how-safe-linking-mangles-the-pointer-glibc-1"><span class="cp">#define PROTECT_PTR(pos, ptr) \</span>
+</span><span id="how-safe-linking-mangles-the-pointer-glibc-2"><span class="hll"><span class="cp">    ((__typeof__(ptr)) ((((size_t) (pos)) &gt;&gt; 12) ^ ((size_t) (ptr))))</span>
+</span></span><span id="how-safe-linking-mangles-the-pointer-glibc-3"><span class="cp">#define REVEAL_PTR(ptr)  PROTECT_PTR(&amp;ptr, ptr)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>So you can't just write <code class="highlight">&amp;target</code> anymore — you have to write
+<code class="highlight">target XOR (chunk_addr &gt;&gt; 12)</code>. Which means you need a <strong>heap leak</strong> first, to
+know <code class="highlight">chunk_addr</code>. The primitive didn't die; it grew a prerequisite.</p>
+<table>
+<thead>
+<tr>
+<th>glibc</th>
+<th>tcache <code class="highlight">next</code></th>
+<th>what you need to poison</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>≤ 2.31</td>
+<td>raw pointer</td>
+<td>just the write</td>
+</tr>
+<tr>
+<td>≥ 2.32</td>
+<td>XOR-mangled</td>
+<td>the write <strong>+ a heap leak</strong></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">alignment check, too</p>
+<p>Modern glibc also verifies that chunks coming out of the tcache are
+16-byte aligned. A forged <code class="highlight">next</code> pointing at some random unaligned address
+will abort with <em>"malloc(): unaligned tcache chunk detected"</em>. Pick targets
+that are already aligned, or align them yourself.</p>
+</div>
+<h2 id="what-to-actually-take-away">what to actually take away<a class="headerlink" href="#what-to-actually-take-away" title="Permanent link">#</a></h2>
+<p>The mechanics matter less than the mental model: <strong>freed memory is still
+attacker-controlled memory, and allocators keep their bookkeeping inside it.</strong>
+Every heap technique — fastbin dup, house of spirit, the whole "house of"
+bestiary — is a variation on lying to the allocator about its own metadata.</p>
+<p>Get this one cold on a toy you built yourself before you touch a real target.
+Reproduce it under different glibc versions and watch the recipe change. The
+day safe-linking stops feeling like a wall and starts feeling like one more XOR
+you account for is the day heap pwn clicks.</p>
+<div class="footnote">
+<hr>
+<ol>
+<li id="fn:where">
+<p><em>Where</em> you aim is the whole game and it's target-specific. The
+primitive is generic; turning it into a shell depends on what's writable and
+what's leaked. That's the part no tutorial can hand you.&#160;<a class="footnote-backref" href="#fnref:where" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/pwndbg-muscle-memory/"><span class="row__date">2026-05-01</span><span class="row__tag">pwn</span><span class="row__title">pwndbg muscle memory</span><span class="row__min">4 min</span></a><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/ret2libc-warmup/"><span class="lbl">&#8249; newer</span>ret2libc on a warm-up: stack smash to shell</a><a class="next" href="/p/this-site-is-a-folder-of-text-files/"><span class="lbl">older &#8250;</span>this site is a folder of text files</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

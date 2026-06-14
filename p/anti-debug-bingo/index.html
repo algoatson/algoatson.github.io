@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>anti-debug bingo: five checks and how they fall — algoatson.github.io</title>
+<meta name="description" content="A survey of the anti-debug checks you trip over on Linux RE targets — what each one measures, the one line that gives it away, and the cheapest defeat. Folded one per card so you can skim to the one that&#x27;s biting you right now.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/anti-debug-bingo/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="anti-debug bingo: five checks and how they fall — algoatson.github.io">
+<meta property="og:description" content="A survey of the anti-debug checks you trip over on Linux RE targets — what each one measures, the one line that gives it away, and the cheapest defeat. Folded one per card so you can skim to the one that&#x27;s biting you right now.">
+<meta property="og:url" content="https://algoatson.github.io/p/anti-debug-bingo/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/anti-debug-bingo.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "anti-debug bingo: five checks and how they fall", "datePublished": "2026-04-09", "dateModified": "2026-04-09", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A survey of the anti-debug checks you trip over on Linux RE targets — what each one measures, the one line that gives it away, and the cheapest defeat. Folded one per card so you can skim to the one that's biting you right now.", "url": "https://algoatson.github.io/p/anti-debug-bingo/", "mainEntityOfPage": "https://algoatson.github.io/p/anti-debug-bingo/", "keywords": "re, anti-debug, linux"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>anti-debug bingo: five checks and how they fall</h1>
+  <div class="meta"><span>2026-04-09</span><span>4 min read</span><a class="tag" href="/tags/re/">re</a> <a class="tag" href="/tags/anti-debug/">anti-debug</a> <a class="tag" href="/tags/linux/">linux</a></div>
+</header>
+
+<div class="postwrap">
+  
+  <article class="prose"><p>Anti-debug on Linux is mostly theatre. Almost every check reduces to "am I being
+<code class="highlight">ptrace</code>d," asked five different ways, and once you've seen each one it's a
+pattern match — spot the tell, patch one branch, move on. Here's the bingo card.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>check</th>
+<th>what it measures</th>
+<th>the tell</th>
+<th>cheapest defeat</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td><code class="highlight">PTRACE_TRACEME</code></td>
+<td>is a tracer already attached</td>
+<td>a <code class="highlight">ptrace</code> syscall, ret in EAX</td>
+<td>force the return value</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td><code class="highlight">TracerPid</code></td>
+<td>the kernel's own bookkeeping</td>
+<td>an <code class="highlight">open(&quot;/proc/self/status&quot;)</code></td>
+<td>hook the read, or patch</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td><code class="highlight">rdtsc</code> timing</td>
+<td>wall-clock across a region</td>
+<td>two <code class="highlight">rdtsc</code> and a <code class="highlight">sub</code></td>
+<td>don't single-step</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td>breakpoint scan</td>
+<td><code class="highlight">0xCC</code> bytes in <code class="highlight">.text</code></td>
+<td>a self-checksum loop</td>
+<td>hardware breakpoints</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td>parent identity</td>
+<td>who launched me</td>
+<td>a <code class="highlight">readlink</code> on <code class="highlight">/proc/.../exe</code></td>
+<td>rename your debugger</td>
+</tr>
+</tbody>
+</table>
+<p>The checks are independent, so they fold independently — open the one you need.</p>
+<details class="note">
+<summary>1 · ptrace(PTRACE_TRACEME)</summary>
+<p>A process can have exactly one tracer. The program calls <code class="highlight">TRACEME</code> <em>on itself</em>
+first, so that when a debugger later tries to attach, the kernel refuses — or,
+run the other way, <code class="highlight">TRACEME</code> returns <code class="highlight">-1</code> because the debugger got there first.</p>
+<figure class="codeblock"><figcaption><span class="fname">check 1</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#check-1-1">1</a></span>
+<span class="normal"><a href="#check-1-2">2</a></span>
+<span class="normal"><a href="#check-1-3">3</a></span>
+<span class="normal"><a href="#check-1-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="check-1-1"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ptrace</span><span class="p">(</span><span class="n">PTRACE_TRACEME</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="check-1-2"><span class="w">    </span><span class="n">puts</span><span class="p">(</span><span class="s">&quot;nice try&quot;</span><span class="p">);</span>
+</span><span id="check-1-3"><span class="w">    </span><span class="n">_exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+</span><span id="check-1-4"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><strong>Defeat.</strong> In gdb, intercept the syscall and zero its result:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">catch syscall ptrace
+</span><span id="code-2">commands
+</span><span id="code-3">  set $rax = 0
+</span><span id="code-4">  continue
+</span><span id="code-5">end
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Or kill it permanently — flip the <code class="highlight">js</code>/<code class="highlight">jne</code> that acts on the result to an
+unconditional fall-through:</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">patch the branch</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#patch-the-branch-1">1</a></span>
+<span class="normal"><a href="#patch-the-branch-2">2</a></span>
+<span class="normal"><a href="#patch-the-branch-3">3</a></span>
+<span class="normal"><a href="#patch-the-branch-4">4</a></span>
+<span class="normal"><a href="#patch-the-branch-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="patch-the-branch-1"><span class="gd">-    test eax, eax</span>
+</span><span id="patch-the-branch-2"><span class="gd">-    js   fail            ; jump if ptrace returned &lt; 0</span>
+</span><span id="patch-the-branch-3"><span class="gi">+    test eax, eax</span>
+</span><span id="patch-the-branch-4"><span class="gi">+    nop                  ; eax ignored</span>
+</span><span id="patch-the-branch-5"><span class="gi">+    nop</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<details class="note">
+<summary>2 · TracerPid in /proc/self/status</summary>
+<p>The kernel records the tracer's <abbr title="Process Identifier">PID</abbr> and exposes it; <code class="highlight">0</code> means nobody's
+watching. No syscall to catch this time — just a file read and a parse.</p>
+<figure class="codeblock"><figcaption><span class="fname">check 2</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#check-2-1">1</a></span>
+<span class="normal"><a href="#check-2-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="check-2-1"><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">strstr</span><span class="p">(</span><span class="n">status_buf</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;TracerPid:&quot;</span><span class="p">);</span>
+</span><span id="check-2-2"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">atoi</span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="n">_exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><strong>Defeat.</strong> <code class="highlight">LD_PRELOAD</code> an <code class="highlight">open</code>/<code class="highlight">read</code> shim that rewrites the line, or — since
+you're already in a debugger — set a breakpoint after the <code class="highlight">atoi</code> and clobber
+its return to <code class="highlight">0</code>. The file read is the tell; nothing else opens
+<code class="highlight">/proc/self/status</code> in a hot path.</p>
+</details>
+<details class="note">
+<summary>3 · rdtsc timing</summary>
+<p>Single-stepping is <em>slow</em>. The program reads the cycle counter, runs a short
+region, reads it again, and if the delta is enormous it assumes a human is
+stepping through.</p>
+<figure class="codeblock"><figcaption><span class="fname">check 3</span><span class="lang">nasm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#check-3-1">1</a></span>
+<span class="normal"><a href="#check-3-2">2</a></span>
+<span class="normal"><a href="#check-3-3">3</a></span>
+<span class="normal"><a href="#check-3-4">4</a></span>
+<span class="normal"><a href="#check-3-5">5</a></span>
+<span class="normal"><a href="#check-3-6">6</a></span>
+<span class="normal"><a href="#check-3-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="check-3-1"><span class="w">    </span><span class="nf">rdtsc</span>
+</span><span id="check-3-2"><span class="w">    </span><span class="nf">mov</span><span class="w">   </span><span class="nb">ebx</span><span class="p">,</span><span class="w"> </span><span class="nb">eax</span><span class="w">        </span><span class="c1">; t0</span>
+</span><span id="check-3-3"><span class="w">    </span><span class="c1">; ... guarded region ...</span>
+</span><span id="check-3-4"><span class="w">    </span><span class="nf">rdtsc</span>
+</span><span id="check-3-5"><span class="w">    </span><span class="nf">sub</span><span class="w">   </span><span class="nb">eax</span><span class="p">,</span><span class="w"> </span><span class="nb">ebx</span><span class="w">        </span><span class="c1">; delta</span>
+</span><span id="check-3-6"><span class="w">    </span><span class="nf">cmp</span><span class="w">   </span><span class="nb">eax</span><span class="p">,</span><span class="w"> </span><span class="mh">0x100000</span><span class="w">   </span><span class="c1">; &quot;too slow&quot; threshold</span>
+</span><span id="check-3-7"><span class="w">    </span><span class="nf">ja</span><span class="w">    </span><span class="nv">fail</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><strong>Defeat.</strong> Don't step the guarded region — set a breakpoint <em>past</em> it and
+<code class="highlight">continue</code>, so the whole thing runs at native speed between two stops. Timing
+checks only catch you if you're stepping the instructions they bracket.</p>
+</details>
+<details class="note">
+<summary>4 · breakpoint / 0xCC scan</summary>
+<p>A software breakpoint is the byte <code class="highlight">0xCC</code> (<code class="highlight">int3</code>) patched over an instruction.
+The program defends by checksumming its own <code class="highlight">.text</code>, or literally scanning for
+<code class="highlight">0xCC</code>, and bails if it finds one it didn't put there.</p>
+<figure class="codeblock"><figcaption><span class="fname">check 4</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#check-4-1">1</a></span>
+<span class="normal"><a href="#check-4-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="check-4-1"><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint8_t</span><span class="w"> </span><span class="o">*</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">text_start</span><span class="p">;</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">text_end</span><span class="p">;</span><span class="w"> </span><span class="n">p</span><span class="o">++</span><span class="p">)</span>
+</span><span id="check-4-2"><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">p</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mh">0xCC</span><span class="p">)</span><span class="w"> </span><span class="n">_exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><strong>Defeat.</strong> Use <em>hardware</em> breakpoints (<code class="highlight">hbreak</code> in gdb) — they live in the
+debug registers and never touch the instruction bytes, so a <code class="highlight">.text</code> scan sees
+nothing. Four of them is usually enough.</p>
+</details>
+<details class="note">
+<summary>5 · parent identity</summary>
+<p>The crudest one: walk up to the parent and see if it's a known debugger.</p>
+<figure class="codeblock"><figcaption><span class="fname">check 5</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#check-5-1">1</a></span>
+<span class="normal"><a href="#check-5-2">2</a></span>
+<span class="normal"><a href="#check-5-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="check-5-1"><span class="kt">char</span><span class="w"> </span><span class="n">exe</span><span class="p">[</span><span class="mi">256</span><span class="p">];</span>
+</span><span id="check-5-2"><span class="n">readlink</span><span class="p">(</span><span class="s">&quot;/proc/&lt;ppid&gt;/exe&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">exe</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="w"> </span><span class="n">exe</span><span class="p">);</span>
+</span><span id="check-5-3"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">strstr</span><span class="p">(</span><span class="n">exe</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;gdb&quot;</span><span class="p">))</span><span class="w"> </span><span class="n">_exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><strong>Defeat.</strong> It's a string compare against a filename — rename the binary, or
+launch the target from a neutral wrapper so the parent is <code class="highlight">sh</code>, not <code class="highlight">gdb</code>.
+Cheap check, cheaper bypass.</p>
+</details>
+<p>Run the card top to bottom and the target usually goes quiet:</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> ptrace self-attach — return value forced</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> TracerPid — read hooked</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> rdtsc — breakpoint moved past the region</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> 0xCC scan — hardware breakpoints only</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> parent check — still renaming <code class="highlight">gdb</code> to <code class="highlight">g</code>, every single time<sup id="fnref:lazy"><a class="footnote-ref" href="#fn:lazy">1</a></sup></li>
+</ul>
+<div class="admonition tip">
+<p class="admonition-title">find them before they find you</p>
+<p>Most of these announce themselves statically. <code class="highlight">ptrace</code>, <code class="highlight">rdtsc</code>, and a
+<code class="highlight">/proc/self/status</code> string are all visible in a flat disassembly — grep the
+symbols and the constants first, and you'll know which cards are on the board
+before you ever hit a single trap.</p>
+</div>
+<div class="footnote">
+<hr>
+<ol>
+<li id="fn:lazy">
+<p>There is no good reason I haven't just aliased this. The wrapper is three
+lines. I will do it next CTF. (I have said this for four CTFs.)&#160;<a class="footnote-backref" href="#fnref:lazy" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/first-five-minutes-unknown-binary/"><span class="row__date">2026-04-22</span><span class="row__tag">re</span><span class="row__title">the first five minutes with an unknown binary</span><span class="row__min">3 min</span></a><a class="row" href="/p/rizin-radare2-in-anger/"><span class="row__date">2026-06-02</span><span class="row__tag">re</span><span class="row__title">rizin and radare2 in anger</span><span class="row__min">4 min</span></a><a class="row" href="/p/slab-uaf-modprobe/"><span class="row__date">2026-02-14</span><span class="row__tag">kernel</span><span class="row__title">a slab use-after-free, from ioctl to root</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/first-five-minutes-unknown-binary/"><span class="lbl">&#8249; newer</span>the first five minutes with an unknown binary</a><a class="next" href="/p/ecdsa-nonce-reuse/"><span class="lbl">older &#8250;</span>two signatures, one nonce: recovering an ECDSA key</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

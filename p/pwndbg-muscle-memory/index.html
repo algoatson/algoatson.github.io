@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>pwndbg muscle memory — algoatson.github.io</title>
+<meta name="description" content="The gdb + pwndbg commands I actually type, grouped the way I reach for them rather than the way the docs list them. Heap inspection, the search primitives, breaking under PIE, and the three-command pre-flight before every session.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/pwndbg-muscle-memory/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="pwndbg muscle memory — algoatson.github.io">
+<meta property="og:description" content="The gdb + pwndbg commands I actually type, grouped the way I reach for them rather than the way the docs list them. Heap inspection, the search primitives, breaking under PIE, and the three-command pre-flight before every session.">
+<meta property="og:url" content="https://algoatson.github.io/p/pwndbg-muscle-memory/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/pwndbg-muscle-memory.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "pwndbg muscle memory", "datePublished": "2026-05-01", "dateModified": "2026-05-01", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The gdb + pwndbg commands I actually type, grouped the way I reach for them rather than the way the docs list them. Heap inspection, the search primitives, breaking under PIE, and the three-command pre-flight before every session.", "url": "https://algoatson.github.io/p/pwndbg-muscle-memory/", "mainEntityOfPage": "https://algoatson.github.io/p/pwndbg-muscle-memory/", "keywords": "pwn, heap, notes"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>pwndbg muscle memory</h1>
+  <div class="meta"><span>2026-05-01</span><span>4 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/notes/">notes</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#pre-flight">pre-flight</a></li>
+<li><a href="#the-three-i-type-most">the three I type most</a></li>
+<li><a href="#navigation-breakpoints">navigation &amp; breakpoints</a></li>
+<li><a href="#inspecting-memory">inspecting memory</a></li>
+<li><a href="#the-heap">the heap</a></li>
+<li><a href="#search">search</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>This is the subset of pwndbg I use without thinking. It isn't the manual — it's
+the muscle memory, the commands that survive contact with a real target. Install
+is one line into a fresh gdb:</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="gp">$ </span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/pwndbg/pwndbg<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>pwndbg<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>./setup.sh
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="pre-flight">pre-flight<a class="headerlink" href="#pre-flight" title="Permanent link">#</a></h2>
+<p>Three commands before anything else, every time:</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code class="highlight">checksec</code> — what am I up against (NX, <abbr title="Position-Independent Executable">PIE</abbr>, RELRO, canary)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code class="highlight">start</code> — break at the entry/<code class="highlight">main</code> and get a live process + mappings</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code class="highlight">vmmap</code> — where is everything actually mapped right now</li>
+</ul>
+<h2 id="the-three-i-type-most">the three I type most<a class="headerlink" href="#the-three-i-type-most" title="Permanent link">#</a></h2>
+<dl>
+<dt><code class="highlight">telescope</code></dt>
+<dd>dereference a chain of pointers and label what each one points at —
+<code class="highlight">telescope $rsp 30</code> is how I read a stack. <code class="highlight">telescope -r $rax</code> walks backwards.
+It's <code class="highlight">x/gx</code> that does the deref work for you.</dd>
+<dt><code class="highlight">vmmap</code></dt>
+<dd>the live memory map with permissions. <code class="highlight">vmmap libc</code> filters to one module;
+<code class="highlight">vmmap $rsp</code> tells you which region an address lives in. This is your leak
+sanity-check — does that pointer land in libc, the heap, or the stack?</dd>
+<dt><code class="highlight">context</code> (alias <code class="highlight">ctx</code>)</dt>
+<dd>the register / code / stack / backtrace dashboard pwndbg prints on every stop.
+<code class="highlight">context</code> reprints it; <code class="highlight">ctx code</code>, <code class="highlight">ctx stack</code> show one pane when the full one
+scrolls off.</dd>
+</dl>
+<h2 id="navigation-breakpoints">navigation &amp; breakpoints<a class="headerlink" href="#navigation-breakpoints" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th>command</th>
+<th>what it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="highlight">b *0x401234</code></td>
+<td>break at an absolute address</td>
+</tr>
+<tr>
+<td><code class="highlight">b main</code> / <code class="highlight">b file:42</code></td>
+<td>break at a symbol or source line</td>
+</tr>
+<tr>
+<td><code class="highlight">breakrva 0x1234</code></td>
+<td>break at an <strong>offset</strong> — the right way under <abbr title="Position-Independent Executable">PIE</abbr></td>
+</tr>
+<tr>
+<td><code class="highlight">b *$rebase(0x1234)</code></td>
+<td>same idea inline: <code class="highlight">$rebase()</code> adds the <abbr title="Position-Independent Executable">PIE</abbr> load base</td>
+</tr>
+<tr>
+<td><code class="highlight">starti</code></td>
+<td>stop at the very first instruction (<code class="highlight">_start</code>)</td>
+</tr>
+<tr>
+<td><code class="highlight">ni</code> / <code class="highlight">si</code></td>
+<td>step over / into one instruction</td>
+</tr>
+<tr>
+<td><code class="highlight">nextcall</code> / <code class="highlight">nextret</code></td>
+<td>run until the next <code class="highlight">call</code> / <code class="highlight">ret</code> — skip the boilerplate</td>
+</tr>
+<tr>
+<td><code class="highlight">finish</code> (<code class="highlight">fin</code>)</td>
+<td>run until the current function returns</td>
+</tr>
+<tr>
+<td><code class="highlight">set follow-fork-mode child</code></td>
+<td>follow the fork (forking servers)</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title"><abbr title="Position-Independent Executable">PIE</abbr> addresses change, offsets don't</p>
+<p>Never hard-code a <abbr title="Position-Independent Executable">PIE</abbr> address from a previous run — ASLR moved it. Set
+breakpoints with <code class="highlight">breakrva</code>/<code class="highlight">$rebase</code> against the file offset you saw in the
+disassembler, and they survive every restart.</p>
+</div>
+<h2 id="inspecting-memory">inspecting memory<a class="headerlink" href="#inspecting-memory" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th>command</th>
+<th>what it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="highlight">x/20gx $rsp</code></td>
+<td>20 giant (8-byte) words in hex from <code class="highlight">$rsp</code></td>
+</tr>
+<tr>
+<td><code class="highlight">x/8i $pc</code></td>
+<td>next 8 instructions</td>
+</tr>
+<tr>
+<td><code class="highlight">x/s 0x4040a0</code></td>
+<td>read a C string</td>
+</tr>
+<tr>
+<td><code class="highlight">hexdump $rax 0x40</code></td>
+<td>pwndbg's annotated hexdump</td>
+</tr>
+<tr>
+<td><code class="highlight">p/x $rdi</code> / <code class="highlight">p $eax</code></td>
+<td>print a register, hex or decimal</td>
+</tr>
+<tr>
+<td><code class="highlight">xinfo 0x7fff...</code></td>
+<td>"what <em>is</em> this address" — module, section, offset</td>
+</tr>
+<tr>
+<td><code class="highlight">set {int}0x404060 = 1</code></td>
+<td>poke a value into memory</td>
+</tr>
+<tr>
+<td><code class="highlight">set $rip = 0x401200</code></td>
+<td>redirect execution</td>
+</tr>
+<tr>
+<td><code class="highlight">watch *0x404060</code></td>
+<td>break when that memory changes (<code class="highlight">rwatch</code> on read)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-heap">the heap<a class="headerlink" href="#the-heap" title="Permanent link">#</a></h2>
+<p>The reason pwndbg exists. All of these read glibc's live allocator state:</p>
+<table>
+<thead>
+<tr>
+<th>command</th>
+<th>what it shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="highlight">vis</code> (<code class="highlight">vis_heap_chunks</code>)</td>
+<td>the heap drawn chunk-by-chunk, freelist links coloured</td>
+</tr>
+<tr>
+<td><code class="highlight">heap</code></td>
+<td>every chunk in the current arena, top to top chunk</td>
+</tr>
+<tr>
+<td><code class="highlight">bins</code></td>
+<td>all bins at once — tcache, fast, unsorted, small, large</td>
+</tr>
+<tr>
+<td><code class="highlight">tcachebins</code></td>
+<td>just the tcache, per size class, with the <code class="highlight">next</code> chain</td>
+</tr>
+<tr>
+<td><code class="highlight">fastbins</code></td>
+<td>the fastbin freelist</td>
+</tr>
+<tr>
+<td><code class="highlight">malloc_chunk 0x..</code></td>
+<td>decode one chunk header (size, prev_size, flags)</td>
+</tr>
+<tr>
+<td><code class="highlight">top_chunk</code></td>
+<td>the wilderness chunk and its size</td>
+</tr>
+<tr>
+<td><code class="highlight">find_fake_fast 0x..</code></td>
+<td>scan for a size field that lets you allocate <em>onto</em> an address</td>
+</tr>
+<tr>
+<td><code class="highlight">arena</code> / <code class="highlight">arenas</code></td>
+<td>the <code class="highlight">malloc_state</code> for this / every arena</td>
+</tr>
+</tbody>
+</table>
+<dl>
+<dt>chunk</dt>
+<dd>glibc's allocation unit: an 8/16-byte header (<code class="highlight">prev_size</code>, <code class="highlight">size</code> with its
+low flag bits) followed by user data. <code class="highlight">size &amp; ~0x7</code> is the real size.</dd>
+<dt>tcache</dt>
+<dd>per-thread, single-linked cache of recently freed chunks; the first stop on
+<code class="highlight">free</code> and the first served on <code class="highlight">malloc</code>. Poisoning its <code class="highlight">next</code> is the modern
+"near-arbitrary write" — see <a href="/p/tcache-poisoning-explained/">tcache poisoning</a>.</dd>
+<dt>safe-linking</dt>
+<dd>glibc ≥ 2.32 stores <code class="highlight">next</code> as <code class="highlight">ptr ^ (chunk_addr &gt;&gt; 12)</code>, so overwriting a
+freelist pointer needs a heap leak first. <code class="highlight">vis</code> shows the demangled value.</dd>
+</dl>
+<h2 id="search">search<a class="headerlink" href="#search" title="Permanent link">#</a></h2>
+<p><code class="highlight">search</code> is the swiss-army primitive — find a value, a string, or a pointer:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-2-1">1</a></span>
+<span class="normal"><a href="#code-2-2">2</a></span>
+<span class="normal"><a href="#code-2-3">3</a></span>
+<span class="normal"><a href="#code-2-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-2-1">search -t qword 0xdeadbeefcafef00d   # an 8-byte value, anywhere mapped
+</span><span id="code-2-2">search -s &quot;/bin/sh&quot;                   # a string (great in libc)
+</span><span id="code-2-3">search -x 6a3b58                      # a hex byte pattern
+</span><span id="code-2-4">search -w 0x404060                    # writable mappings only
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="note">
+<summary>advanced — the one-liners I keep in a snippet file</summary>
+<p>Find a <code class="highlight">pop rdi; ret</code> without leaving gdb:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-3-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-3-1">rop --grep &quot;pop rdi&quot;
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Dump the <abbr title="Global Offset Table">GOT</abbr> and <abbr title="Procedure Linkage Table">PLT</abbr>, see what libc calls are reachable:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-4-1">1</a></span>
+<span class="normal"><a href="#code-4-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-4-1">got
+</span><span id="code-4-2">plt
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Cyclic pattern in, offset out — no pen-and-paper:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-5-1">1</a></span>
+<span class="normal"><a href="#code-5-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-5-1">cyclic 200            # paste this as input
+</span><span id="code-5-2">cyclic -l 0x6161616c  # the value in $rip after the crash -&gt; the offset
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Turn ASLR off for a deterministic session (then turn it back on before you
+trust an exploit):</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-6-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-6-1">aslr off
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<div class="admonition warning">
+<p class="admonition-title">don't ship an exploit you only tested with aslr off</p>
+<p>A chain that works at a fixed base and breaks under ASLR means your leak is
+wrong, not your gadgets. Test the final version with <code class="highlight">aslr on</code> and from a
+fresh <code class="highlight">run</code> each time.</p>
+</div></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/tcache-poisoning-explained/"><span class="row__date">2026-01-18</span><span class="row__tag">heap</span><span class="row__title">tcache poisoning, explained like you&#x27;ll have to use it</span><span class="row__min">4 min</span></a><a class="row" href="/p/pwntools-cookbook/"><span class="row__date">2026-05-26</span><span class="row__tag">pwn</span><span class="row__title">a pwntools cookbook</span><span class="row__min">4 min</span></a><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/finding-gadgets/"><span class="lbl">&#8249; newer</span>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a><a class="next" href="/p/first-five-minutes-unknown-binary/"><span class="lbl">older &#8250;</span>the first five minutes with an unknown binary</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

