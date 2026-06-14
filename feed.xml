@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
     <description>reverse engineering / binary exploitation / ctf</description>
     <language>en</language>
-    <lastBuildDate>Sun, 14 Jun 2026 21:40:56 +0000</lastBuildDate>
+    <lastBuildDate>Sun, 14 Jun 2026 21:54:30 +0000</lastBuildDate>
     <item>
       <title>the House of Spirit</title>
       <link>https://algoatson.github.io/p/house-of-spirit/</link>
@@ -24,12 +24,52 @@
       <description>Part 8 — the most innocent-looking heap bug there is: one null byte written one byte too far. It lands on a neighbouring chunk&#x27;s size field, desyncs the allocator&#x27;s bookkeeping, and ends with two chunks overlapping the same memory.</description>
     </item>
     <item>
+      <title>tcache dup</title>
+      <link>https://algoatson.github.io/p/tcache-dup/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/tcache-dup/</guid>
+      <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 10 — the fastbin dup&#x27;s lazier cousin. The tcache had no double-free check at all for two glibc releases, and the one it finally got is a single field you can overwrite. Free a chunk twice, get it twice, poison.</description>
+    </item>
+    <item>
+      <title>the House of Corrosion</title>
+      <link>https://algoatson.github.io/p/the-house-of-corrosion/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/the-house-of-corrosion/</guid>
+      <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 14, the finale — for the challenge that gives you no libc leak and barely any allocations. Blow open global_max_fast and the fastbin index arithmetic starts pointing into libc itself, turning &quot;free a chunk of size N&quot; into &quot;write a heap pointer to a libc address&quot;. Bootstrap a leak from nothing.</description>
+    </item>
+    <item>
+      <title>the House of Einherjar</title>
+      <link>https://algoatson.github.io/p/the-house-of-einherjar/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/the-house-of-einherjar/</guid>
+      <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 11 — one null byte clears a chunk&#x27;s PREV_INUSE, a forged prev_size says &quot;the previous chunk starts way over there&quot;, and free() consolidates backward into a fake chunk you placed anywhere. Arbitrary allocation from a single off-by-one.</description>
+    </item>
+    <item>
+      <title>the House of Lore</title>
+      <link>https://algoatson.github.io/p/the-house-of-lore/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/the-house-of-lore/</guid>
+      <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 12 — the smallbins are doubly-linked and handed out from the tail. Overwrite a smallbin chunk&#x27;s bk to point at a fake chunk and malloc will walk right into it, returning a chunk on the stack. The unlink check just needs a back-pointer.</description>
+    </item>
+    <item>
       <title>the House of Orange</title>
       <link>https://algoatson.github.io/p/the-house-of-orange/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/the-house-of-orange/</guid>
       <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
       <category>heap</category><category>pwn</category><category>glibc</category>
       <description>Part 9, the capstone — no free() in the binary at all. Force malloc to free the top chunk for you, leak libc from it, then turn the unsorted bin attack into a forged FILE struct whose vtable call drops a shell. Heap meets FSOP.</description>
+    </item>
+    <item>
+      <title>the House of Rabbit</title>
+      <link>https://algoatson.github.io/p/the-house-of-rabbit/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/the-house-of-rabbit/</guid>
+      <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 13 — fastbins don&#x27;t consolidate… until malloc_consolidate sweeps them. Forge a fastbin chunk&#x27;s size to something enormous, trigger the sweep, and that little chunk becomes a giant free chunk overlapping everything after it. Overlap from almost no primitive.</description>
     </item>
     <item>
       <title>the unsorted bin attack</title>

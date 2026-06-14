@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>tcache dup — algoatson.github.io</title>
+<meta name="description" content="Part 10 — the fastbin dup&#x27;s lazier cousin. The tcache had no double-free check at all for two glibc releases, and the one it finally got is a single field you can overwrite. Free a chunk twice, get it twice, poison.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/tcache-dup/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="tcache dup — algoatson.github.io">
+<meta property="og:description" content="Part 10 — the fastbin dup&#x27;s lazier cousin. The tcache had no double-free check at all for two glibc releases, and the one it finally got is a single field you can overwrite. Free a chunk twice, get it twice, poison.">
+<meta property="og:url" content="https://algoatson.github.io/p/tcache-dup/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/tcache-dup.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "tcache dup", "datePublished": "2026-06-14", "dateModified": "2026-06-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 10 — the fastbin dup's lazier cousin. The tcache had no double-free check at all for two glibc releases, and the one it finally got is a single field you can overwrite. Free a chunk twice, get it twice, poison.", "url": "https://algoatson.github.io/p/tcache-dup/", "mainEntityOfPage": "https://algoatson.github.io/p/tcache-dup/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>tcache dup</h1>
+  <div class="meta"><span>2026-06-14</span><span>3 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 10 of 14</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li><li><a href="/p/house-of-spirit/">the House of Spirit</a></li><li><a href="/p/poison-null-byte/">the poison null byte</a></li><li><a href="/p/the-house-of-orange/">the House of Orange</a></li><li class="cur" aria-current="true">tcache dup</li><li><a href="/p/the-house-of-einherjar/">the House of Einherjar</a></li><li><a href="/p/the-house-of-lore/">the House of Lore</a></li><li><a href="/p/the-house-of-rabbit/">the House of Rabbit</a></li><li><a href="/p/the-house-of-corrosion/">the House of Corrosion</a></li></ol></aside>
+<div class="postwrap">
+  
+  <article class="prose"><p><a href="/p/fastbin-dup/">Fastbin dup</a> had to dance around a check. The tcache, for two
+whole releases, had <em>none</em> — <code class="highlight">free</code> a chunk twice and it cheerfully linked it into
+the tcache twice. glibc 2.29 finally added a guard, and it's a single field sitting
+in the freed chunk's own data, which means you can erase it. This is the most
+common double-free you'll actually use.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./tdup</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.31</dd></div><div><dt>technique</dt><dd>tcache double-free -&gt; duplicate chunk -&gt; tcache poisoning</dd></div><div><dt>guard</dt><dd>the 2.29 `key` field (and how to clear it)</dd></div></dl></div></figure>
+<h2 id="227228-just-free-it-twice">2.27–2.28: just free it twice<a class="headerlink" href="#227228-just-free-it-twice" title="Permanent link">#</a></h2>
+<p>On the first two tcache releases there is nothing to bypass:</p>
+<figure class="codeblock"><figcaption><span class="fname">the whole attack, pre-2.29</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-whole-attack-pre-229-1">1</a></span>
+<span class="normal"><a href="#the-whole-attack-pre-229-2">2</a></span>
+<span class="normal"><a href="#the-whole-attack-pre-229-3">3</a></span>
+<span class="normal"><a href="#the-whole-attack-pre-229-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-whole-attack-pre-229-1"><span class="n">free</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w">            </span><span class="c1">// tcache[idx]: a</span>
+</span><span id="the-whole-attack-pre-229-2"><span class="n">free</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w">            </span><span class="c1">// tcache[idx]: a -&gt; a    (no complaint at all)</span>
+</span><span id="the-whole-attack-pre-229-3"><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="n">sz</span><span class="p">);</span><span class="w">     </span><span class="c1">// x == a</span>
+</span><span id="the-whole-attack-pre-229-4"><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="n">sz</span><span class="p">);</span><span class="w">     </span><span class="c1">// y == a  -&gt; two live pointers to one chunk</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Now <code class="highlight">x</code> and <code class="highlight">y</code> alias. Free one, edit it through the other, and you control a freed
+chunk's <code class="highlight">fd</code> — which <em>is</em> <a href="/p/tcache-poisoning-explained/">tcache poisoning</a>: the
+next-but-one allocation lands wherever you point.</p>
+<h2 id="229-the-key-field-and-erasing-it">2.29+: the key field, and erasing it<a class="headerlink" href="#229-the-key-field-and-erasing-it" title="Permanent link">#</a></h2>
+<p>glibc 2.29 gave freed tcache chunks a <code class="highlight">key</code> — the second quadword of the chunk's
+data is set to the address of the <code class="highlight">tcache_perthread_struct</code>. On <code class="highlight">free</code>, if the
+chunk you're freeing already carries that key, glibc walks the bin looking for a
+double-free and aborts:</p>
+<figure class="codeblock"><figcaption><span class="fname">glibc malloc.c — tcache_entry, and the check</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-mallocc-tcache-entry-and-the-check-1">1</a></span>
+<span class="normal"><a href="#glibc-mallocc-tcache-entry-and-the-check-2">2</a></span>
+<span class="normal"><a href="#glibc-mallocc-tcache-entry-and-the-check-3">3</a></span>
+<span class="normal"><a href="#glibc-mallocc-tcache-entry-and-the-check-4">4</a></span>
+<span class="normal"><a href="#glibc-mallocc-tcache-entry-and-the-check-5">5</a></span>
+<span class="normal"><a href="#glibc-mallocc-tcache-entry-and-the-check-6">6</a></span>
+<span class="normal"><a href="#glibc-mallocc-tcache-entry-and-the-check-7">7</a></span>
+<span class="normal"><a href="#glibc-mallocc-tcache-entry-and-the-check-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-mallocc-tcache-entry-and-the-check-1"><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">tcache_entry</span><span class="w"> </span><span class="p">{</span>
+</span><span id="glibc-mallocc-tcache-entry-and-the-check-2"><span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">tcache_entry</span><span class="w"> </span><span class="o">*</span><span class="n">next</span><span class="p">;</span><span class="w">   </span><span class="c1">// 1st quadword: the fd</span>
+</span><span id="glibc-mallocc-tcache-entry-and-the-check-3"><span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">tcache_perthread_struct</span><span class="w"> </span><span class="o">*</span><span class="n">key</span><span class="p">;</span><span class="w">  </span><span class="c1">// 2nd quadword: double-free sentinel</span>
+</span><span id="glibc-mallocc-tcache-entry-and-the-check-4"><span class="p">}</span><span class="w"> </span><span class="n">tcache_entry</span><span class="p">;</span>
+</span><span id="glibc-mallocc-tcache-entry-and-the-check-5">
+</span><span id="glibc-mallocc-tcache-entry-and-the-check-6"><span class="c1">// in _int_free:</span>
+</span><span id="glibc-mallocc-tcache-entry-and-the-check-7"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">__glibc_unlikely</span><span class="w"> </span><span class="p">(</span><span class="n">e</span><span class="o">-&gt;</span><span class="n">key</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">tcache</span><span class="p">))</span>
+</span><span id="glibc-mallocc-tcache-entry-and-the-check-8"><span class="w">    </span><span class="cm">/* scan the bin; abort on &quot;free(): double free detected in tcache 2&quot; */</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The bypass writes itself: between the two frees, <strong>overwrite the key</strong> to anything
+that isn't the tcache pointer. The check <code class="highlight">e-&gt;key == tcache</code> then fails, the scan is
+skipped, and the second free goes through:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">a freed tcache chunk — clobber the key (offset 8) before re-freeing</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|........<mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span></pre></div></figure>
+<figure class="codeblock"><figcaption><span class="fname">the modern version</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-modern-version-1">1</a></span>
+<span class="normal"><a href="#the-modern-version-2">2</a></span>
+<span class="normal"><a href="#the-modern-version-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-modern-version-1"><span class="n">free</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w">                 </span><span class="c1">// tcache[idx]: a   (a-&gt;key = tcache)</span>
+</span><span id="the-modern-version-2"><span class="n">edit</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">));</span><span class="w"> </span><span class="c1">// a-&gt;next = 0, a-&gt;key = 0  (key != tcache now)</span>
+</span><span id="the-modern-version-3"><span class="n">free</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w">                 </span><span class="c1">// passes the check -&gt; tcache[idx]: a -&gt; a</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the rest is poisoning</summary>
+<p>With the duplicate, poison the <code class="highlight">fd</code> to <code class="highlight">__free_hook</code>, allocate it out, write
+<code class="highlight">system</code>, free <code class="highlight">&quot;/bin/sh&quot;</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{th3_tc4ch3_n3v3r_l34rns}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<div class="admonition warning">
+<p class="admonition-title">safe-linking changes the fd write (2.32+)</p>
+<p>From glibc 2.32 the <code class="highlight">next</code>/<code class="highlight">fd</code> field is mangled as <code class="highlight">(&amp;fd &gt;&gt; 12) ^ target</code>, so
+after the dup you need a <strong>heap leak</strong> to compute the poisoned <code class="highlight">fd</code>. And glibc
+2.34 hardened the tcache further with a per-bin <strong>count</strong> check — a sloppy
+double-free can now also trip "free(): double free detected" via the count, so
+keep the bin's bookkeeping consistent.</p>
+</div>
+<p>The tcache dup is the workhorse: simplest double-free, straight into the friendliest
+poison. Next we go back to the classics with a twist — <a href="/p/the-house-of-einherjar/">the House of
+Einherjar</a>, where one null byte lets you consolidate a
+chunk backward into a fake chunk <em>anywhere</em>.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/house-of-spirit/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Spirit</span><span class="row__min">4 min</span></a><a class="row" href="/p/poison-null-byte/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the poison null byte</span><span class="row__min">3 min</span></a><a class="row" href="/p/the-house-of-corrosion/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Corrosion</span><span class="row__min">3 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/poison-null-byte/"><span class="lbl">&#8249; newer</span>the poison null byte</a><a class="next" href="/p/the-house-of-corrosion/"><span class="lbl">older &#8250;</span>the House of Corrosion</a></nav></main>
+
+    <footer class="status">
+      <span>28 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

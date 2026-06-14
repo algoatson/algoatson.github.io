@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the House of Einherjar — algoatson.github.io</title>
+<meta name="description" content="Part 11 — one null byte clears a chunk&#x27;s PREV_INUSE, a forged prev_size says &quot;the previous chunk starts way over there&quot;, and free() consolidates backward into a fake chunk you placed anywhere. Arbitrary allocation from a single off-by-one.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/the-house-of-einherjar/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the House of Einherjar — algoatson.github.io">
+<meta property="og:description" content="Part 11 — one null byte clears a chunk&#x27;s PREV_INUSE, a forged prev_size says &quot;the previous chunk starts way over there&quot;, and free() consolidates backward into a fake chunk you placed anywhere. Arbitrary allocation from a single off-by-one.">
+<meta property="og:url" content="https://algoatson.github.io/p/the-house-of-einherjar/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/the-house-of-einherjar.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the House of Einherjar", "datePublished": "2026-06-14", "dateModified": "2026-06-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 11 — one null byte clears a chunk's PREV_INUSE, a forged prev_size says \"the previous chunk starts way over there\", and free() consolidates backward into a fake chunk you placed anywhere. Arbitrary allocation from a single off-by-one.", "url": "https://algoatson.github.io/p/the-house-of-einherjar/", "mainEntityOfPage": "https://algoatson.github.io/p/the-house-of-einherjar/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the House of Einherjar</h1>
+  <div class="meta"><span>2026-06-14</span><span>3 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 11 of 14</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li><li><a href="/p/house-of-spirit/">the House of Spirit</a></li><li><a href="/p/poison-null-byte/">the poison null byte</a></li><li><a href="/p/the-house-of-orange/">the House of Orange</a></li><li><a href="/p/tcache-dup/">tcache dup</a></li><li class="cur" aria-current="true">the House of Einherjar</li><li><a href="/p/the-house-of-lore/">the House of Lore</a></li><li><a href="/p/the-house-of-rabbit/">the House of Rabbit</a></li><li><a href="/p/the-house-of-corrosion/">the House of Corrosion</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-lever-prev_size-a-cleared-prev_inuse">the lever: prev_size + a cleared PREV_INUSE</a></li>
+<li><a href="#the-fake-chunk">the fake chunk</a></li>
+<li><a href="#limitations">limitations</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The <a href="/p/poison-null-byte/">poison null byte</a> used an off-by-one to overlap two
+adjacent chunks. The House of Einherjar takes the same null byte and aims it across
+the whole address space: clear a chunk's <code class="highlight">PREV_INUSE</code>, lie about how far back the
+"previous chunk" starts, and <code class="highlight">free</code> will consolidate backward into a <strong>fake chunk
+you control</strong> — wherever you put it.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./einherjar</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>off-by-one NULL + forged prev_size -&gt; backward consolidate into a fake chunk</dd></div><div><dt>needs</dt><dd>a heap leak (to measure the distance to your fake chunk)</dd></div></dl></div></figure>
+<h2 id="the-lever-prev_size-a-cleared-prev_inuse">the lever: prev_size + a cleared PREV_INUSE<a class="headerlink" href="#the-lever-prev_size-a-cleared-prev_inuse" title="Permanent link">#</a></h2>
+<p>When <code class="highlight">free(B)</code> runs and <code class="highlight">B</code>'s <code class="highlight">PREV_INUSE</code> is <strong>clear</strong>, glibc believes the chunk
+before <code class="highlight">B</code> is free and consolidates backward. It finds that previous chunk by
+<em>subtracting <code class="highlight">B</code>'s <code class="highlight">prev_size</code></em> from <code class="highlight">B</code>'s address:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>prev\_chunk</mtext><mo>&#x0003D;</mo><mi>&#x00026;</mi><mi>B</mi><mo>&#x02212;</mo><mi>B</mi><mo>&#x0002E;</mo><mtext>prev\_size</mtext></mrow></math></div>
+<p>Both inputs are attacker-reachable. The single null byte from an off-by-one clears
+<code class="highlight">PREV_INUSE</code>; and <code class="highlight">prev_size</code> lives in <code class="highlight">B</code>'s first quadword, which a heap overflow
+(or <code class="highlight">B</code>'s own contents, if it's the chunk before <code class="highlight">B</code> you control) can set. Make:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>B</mi><mo>&#x0002E;</mo><mtext>prev\_size</mtext><mo>&#x0003D;</mo><mi>&#x00026;</mi><mi>B</mi><mo>&#x02212;</mo><mi>&#x00026;</mi><mtext>fake</mtext></mrow></math></div>
+<p>and the consolidation reaches all the way to <code class="highlight">fake</code>.</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">what the off-by-one does to B</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#what-the-off-by-one-does-to-b-1">1</a></span>
+<span class="normal"><a href="#what-the-off-by-one-does-to-b-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="what-the-off-by-one-does-to-b-1"><span class="gd">- B.size = 0x...1     # PREV_INUSE set: prev chunk in use, no backward merge</span>
+</span><span id="what-the-off-by-one-does-to-b-2"><span class="gi">+ B.size = 0x...0     # one null byte: PREV_INUSE clear -&gt; &quot;prev chunk is free&quot;</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-fake-chunk">the fake chunk<a class="headerlink" href="#the-fake-chunk" title="Permanent link">#</a></h2>
+<p><code class="highlight">fake</code> is a chunk header you place in any writable region you can leak the address
+of — another heap buffer, a global. It has to survive the backward
+consolidation's <code class="highlight">unlink</code>, so it uses the same self-referencing trick as <a href="/p/unsafe-unlink/">unsafe
+unlink</a>: point its <code class="highlight">fd</code>/<code class="highlight">bk</code> at a location that points back at
+<code class="highlight">fake</code>, or at itself.</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">fake chunk: size matches prev_size, fd/bk survive unlink</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  <mark>21</mark> <mark>01</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|........<mark>!</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span>
+<span class="off">00000010</span>  b0 c0 60 55 55 55 00 00  b0 c0 60 55 55 55 00 00  <span class="asc">|..`UUU....`UUU..|</span></pre></div></figure>
+<p>When <code class="highlight">free(B)</code> fires, glibc unlinks <code class="highlight">fake</code>, merges <code class="highlight">[fake … end-of-B]</code> into one big
+free chunk, and drops it in the unsorted bin. The very next allocation of that size
+returns <strong><code class="highlight">fake</code></strong> — an arbitrary chunk, sitting on top of whatever you targeted.</p>
+<figure class="codeblock"><figcaption><span class="fname">einherjar.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#einherjarpy-1"> 1</a></span>
+<span class="normal"><a href="#einherjarpy-2"> 2</a></span>
+<span class="normal"><a href="#einherjarpy-3"> 3</a></span>
+<span class="normal"><a href="#einherjarpy-4"> 4</a></span>
+<span class="normal"><a href="#einherjarpy-5"> 5</a></span>
+<span class="normal"><a href="#einherjarpy-6"> 6</a></span>
+<span class="normal"><a href="#einherjarpy-7"> 7</a></span>
+<span class="normal"><a href="#einherjarpy-8"> 8</a></span>
+<span class="normal"><a href="#einherjarpy-9"> 9</a></span>
+<span class="normal"><a href="#einherjarpy-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="einherjarpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="einherjarpy-2"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./einherjar&quot;</span><span class="p">);</span> 
+</span><span id="einherjarpy-3"><span class="n">heap</span> <span class="o">=</span> <span class="n">leak_heap</span><span class="p">()</span>                          <span class="c1"># Einherjar needs to know where `fake` is</span>
+</span><span id="einherjarpy-4">
+</span><span id="einherjarpy-5"><span class="hll"><span class="n">fake</span> <span class="o">=</span> <span class="n">heap</span> <span class="o">+</span> <span class="mh">0x10</span>                          <span class="c1"># craft a fake chunk in a controlled buffer</span>
+</span></span><span id="einherjarpy-6"><span class="hll"><span class="n">forge_fake_chunk</span><span class="p">(</span><span class="n">fake</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="mh">0x120</span><span class="p">,</span> <span class="n">fd</span><span class="o">=</span><span class="n">fake</span><span class="o">-</span><span class="mh">0x18</span><span class="p">,</span> <span class="n">bk</span><span class="o">=</span><span class="n">fake</span><span class="o">-</span><span class="mh">0x10</span><span class="p">)</span>
+</span></span><span id="einherjarpy-7"><span class="hll"><span class="n">overflow_prev_size</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">value</span> <span class="o">=</span> <span class="n">B_addr</span> <span class="o">-</span> <span class="n">fake</span><span class="p">)</span>    <span class="c1"># prev_size = distance back to fake</span>
+</span></span><span id="einherjarpy-8"><span class="n">off_by_one_null</span><span class="p">(</span><span class="n">A</span><span class="p">)</span>                          <span class="c1"># clear B&#39;s PREV_INUSE</span>
+</span><span id="einherjarpy-9"><span class="n">free</span><span class="p">(</span><span class="n">B</span><span class="p">)</span>                                     <span class="c1"># backward consolidate -&gt; fake in unsorted bin</span>
+</span><span id="einherjarpy-10"><span class="n">p</span> <span class="o">=</span> <span class="n">alloc</span><span class="p">(</span><span class="mh">0x110</span><span class="p">)</span>                            <span class="c1"># p == fake</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the payoff</summary>
+<p>Put <code class="highlight">fake</code> over a freed tcache chunk's neighbourhood and the reclaimed chunk
+overlaps it — edit its <code class="highlight">fd</code>, poison, win:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{0n3_byt3_3v3rywh3r3}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="limitations">limitations<a class="headerlink" href="#limitations" title="Permanent link">#</a></h2>
+<ul>
+<li>you need a <strong>heap leak</strong> — <code class="highlight">prev_size</code> is a distance, and the distance depends on
+  ASLR;</li>
+<li>the fake chunk must pass <code class="highlight">unlink</code> (the self-referencing <code class="highlight">fd</code>/<code class="highlight">bk</code>);</li>
+<li>glibc 2.29's <code class="highlight">corrupted size vs. prev_size</code> check (from the <a href="/p/poison-null-byte/">poison null
+  byte</a>) constrains the modern version — the fake chunk's
+  <code class="highlight">size</code> must equal the <code class="highlight">prev_size</code> you forged.</li>
+</ul>
+<p>Einherjar is the off-by-one's long-range cousin: same null byte, but the blast
+radius is the whole address space. Next, the doubly-linked smallbins give the same
+"allocate anywhere" power without the null byte — <a href="/p/the-house-of-lore/">the House of
+Lore</a>.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/house-of-spirit/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Spirit</span><span class="row__min">4 min</span></a><a class="row" href="/p/poison-null-byte/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the poison null byte</span><span class="row__min">3 min</span></a><a class="row" href="/p/tcache-dup/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">tcache dup</span><span class="row__min">3 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/the-house-of-corrosion/"><span class="lbl">&#8249; newer</span>the House of Corrosion</a><a class="next" href="/p/the-house-of-lore/"><span class="lbl">older &#8250;</span>the House of Lore</a></nav></main>
+
+    <footer class="status">
+      <span>28 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

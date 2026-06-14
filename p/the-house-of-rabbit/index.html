@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the House of Rabbit — algoatson.github.io</title>
+<meta name="description" content="Part 13 — fastbins don&#x27;t consolidate… until malloc_consolidate sweeps them. Forge a fastbin chunk&#x27;s size to something enormous, trigger the sweep, and that little chunk becomes a giant free chunk overlapping everything after it. Overlap from almost no primitive.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/the-house-of-rabbit/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the House of Rabbit — algoatson.github.io">
+<meta property="og:description" content="Part 13 — fastbins don&#x27;t consolidate… until malloc_consolidate sweeps them. Forge a fastbin chunk&#x27;s size to something enormous, trigger the sweep, and that little chunk becomes a giant free chunk overlapping everything after it. Overlap from almost no primitive.">
+<meta property="og:url" content="https://algoatson.github.io/p/the-house-of-rabbit/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/the-house-of-rabbit.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the House of Rabbit", "datePublished": "2026-06-14", "dateModified": "2026-06-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 13 — fastbins don't consolidate… until malloc_consolidate sweeps them. Forge a fastbin chunk's size to something enormous, trigger the sweep, and that little chunk becomes a giant free chunk overlapping everything after it. Overlap from almost no primitive.", "url": "https://algoatson.github.io/p/the-house-of-rabbit/", "mainEntityOfPage": "https://algoatson.github.io/p/the-house-of-rabbit/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the House of Rabbit</h1>
+  <div class="meta"><span>2026-06-14</span><span>2 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 13 of 14</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li><li><a href="/p/house-of-spirit/">the House of Spirit</a></li><li><a href="/p/poison-null-byte/">the poison null byte</a></li><li><a href="/p/the-house-of-orange/">the House of Orange</a></li><li><a href="/p/tcache-dup/">tcache dup</a></li><li><a href="/p/the-house-of-einherjar/">the House of Einherjar</a></li><li><a href="/p/the-house-of-lore/">the House of Lore</a></li><li class="cur" aria-current="true">the House of Rabbit</li><li><a href="/p/the-house-of-corrosion/">the House of Corrosion</a></li></ol></aside>
+<div class="postwrap">
+  
+  <article class="prose"><p>Fastbins are the lazy bin: chunks pile up there <em>without</em> consolidating. But the
+moment <code class="highlight">malloc</code> needs a non-fast chunk, <code class="highlight">malloc_consolidate</code> sweeps the whole
+fastbin array into the unsorted bin — trusting each chunk's size on the way. The
+House of Rabbit forges one of those sizes to be enormous, so the sweep produces a
+<strong>giant free chunk</strong> sitting on top of memory that's still in use.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./rabbit</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>forge fastbin chunk size -&gt; malloc_consolidate -&gt; giant overlapping chunk</dd></div><div><dt>needs</dt><dd>edit one freed fastbin chunk + a way to trigger consolidation</dd></div></dl></div></figure>
+<h2 id="the-sweep-that-trusts-your-size">the sweep that trusts your size<a class="headerlink" href="#the-sweep-that-trusts-your-size" title="Permanent link">#</a></h2>
+<p><code class="highlight">malloc_consolidate</code> runs when a request can't be served from the fastbins/tcache
+and <code class="highlight">have_fastchunks</code> is set — in practice, <strong>allocating a larger chunk</strong> triggers
+it. For each fastbin chunk it merges with neighbours and links the result into the
+unsorted bin, reading the size field to find where each chunk ends.</p>
+<p>So: free a fastbin chunk, edit its size to something huge, and trigger the sweep.</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">a freed 0x40 fastbin chunk — size forged up to 0x1001</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  <mark>01</mark> <mark>10</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|........<mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span></pre></div></figure>
+<figure class="codeblock"><figcaption><span class="fname">rabbit.c</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#rabbitc-1">1</a></span>
+<span class="normal"><a href="#rabbitc-2">2</a></span>
+<span class="normal"><a href="#rabbitc-3">3</a></span>
+<span class="normal"><a href="#rabbitc-4">4</a></span>
+<span class="normal"><a href="#rabbitc-5">5</a></span>
+<span class="normal"><a href="#rabbitc-6">6</a></span>
+<span class="normal"><a href="#rabbitc-7">7</a></span>
+<span class="normal"><a href="#rabbitc-8">8</a></span>
+<span class="normal"><a href="#rabbitc-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="rabbitc-1"><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="mh">0x38</span><span class="p">);</span><span class="w">          </span><span class="c1">// 0x40 chunk</span>
+</span><span id="rabbitc-2"><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="mh">0x38</span><span class="p">);</span>
+</span><span id="rabbitc-3"><span class="n">free</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w"> </span><span class="n">free</span><span class="p">(</span><span class="n">b</span><span class="p">);</span><span class="w">                </span><span class="c1">// both into the 0x40 fastbin; have_fastchunks set</span>
+</span><span id="rabbitc-4">
+</span><span id="rabbitc-5"><span class="n">edit</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x1001</span><span class="p">);</span><span class="w">          </span><span class="c1">// forge a&#39;s size to 0x1000 (+ PREV_INUSE)</span>
+</span><span id="rabbitc-6"><span class="c1">//   ...and lay a valid-looking chunk header at a + 0x1000 so the sweep doesn&#39;t fault</span>
+</span><span id="rabbitc-7">
+</span><span id="rabbitc-8"><span class="n">malloc</span><span class="p">(</span><span class="mh">0x500</span><span class="p">);</span><span class="w">                   </span><span class="c1">// not fast -&gt; malloc_consolidate sweeps the fastbins</span>
+</span><span id="rabbitc-9"><span class="c1">// a is now a 0x1000 free chunk in the unsorted bin, overlapping b and beyond</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="why-a-giant-chunk-is-a-win">why a giant chunk is a win<a class="headerlink" href="#why-a-giant-chunk-is-a-win" title="Permanent link">#</a></h2>
+<p>That <code class="highlight">0x1000</code> free chunk overlaps every allocation that lived after <code class="highlight">a</code>. Allocate it
+back and you hold a writable window over other live chunks' data <em>and metadata</em> — the
+same <a href="/p/poison-null-byte/">overlap</a> position that unlocks tcache poisoning, fake
+sizes, and libc-pointer recovery. You manufactured it from a single size edit and a
+large <code class="highlight">malloc</code>, with no double-free and no leak.</p>
+<p>The second flavour of the technique edits a fastbin chunk's <strong><code class="highlight">fd</code></strong> instead of its
+size: point it at a fake chunk, and <code class="highlight">malloc_consolidate</code> links your fake chunk into
+the unsorted bin for you — a fastbin-fd poison that survives into the sorted bins.</p>
+<details class="spoiler">
+<summary>where it goes</summary>
+<p>Reclaim the giant chunk, overwrite the overlapped chunk's <code class="highlight">fd</code> to <code class="highlight">__free_hook</code>,
+poison, <code class="highlight">system</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{c0ns0l1d4t3_th3_wh0l3_h34p}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<div class="admonition warning">
+<p class="admonition-title">the sweep is fragile</p>
+<p><code class="highlight">malloc_consolidate</code> walks chunk-by-chunk using the sizes it reads, so the chunk
+at <code class="highlight">a + forged_size</code> must look like a real chunk (sane size, sane <code class="highlight">PREV_INUSE</code>)
+or the sweep faults mid-merge. Lay a fake header there first, and single-step the
+consolidating <code class="highlight">malloc</code> in pwndbg — this technique crashes loudly when an offset
+is wrong, which at least makes it easy to debug.</p>
+</div>
+<p>Next, the finale for the cruellest challenges — <a href="/p/the-house-of-corrosion/">the House of
+Corrosion</a>, which builds a libc leak and a shell out of
+nothing, no info-leak bug required.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/house-of-spirit/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Spirit</span><span class="row__min">4 min</span></a><a class="row" href="/p/poison-null-byte/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the poison null byte</span><span class="row__min">3 min</span></a><a class="row" href="/p/tcache-dup/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">tcache dup</span><span class="row__min">3 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/the-house-of-orange/"><span class="lbl">&#8249; newer</span>the House of Orange</a><a class="next" href="/p/the-unsorted-bin-attack/"><span class="lbl">older &#8250;</span>the unsorted bin attack</a></nav></main>
+
+    <footer class="status">
+      <span>28 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

