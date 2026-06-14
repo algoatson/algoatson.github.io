@@ -58,13 +58,11 @@ you control</strong> — wherever you put it.</p>
 <h2 id="the-lever-prev_size-a-cleared-prev_inuse">the lever: prev_size + a cleared PREV_INUSE<a class="headerlink" href="#the-lever-prev_size-a-cleared-prev_inuse" title="Permanent link">#</a></h2>
 <p>When <code class="highlight">free(B)</code> runs and <code class="highlight">B</code>'s <code class="highlight">PREV_INUSE</code> is <strong>clear</strong>, glibc believes the chunk
 before <code class="highlight">B</code> is free and consolidates backward. It finds that previous chunk by
-<em>subtracting <code class="highlight">B</code>'s <code class="highlight">prev_size</code></em> from <code class="highlight">B</code>'s address:</p>
-<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>prev\_chunk</mtext><mo>&#x0003D;</mo><mi>&#x00026;</mi><mi>B</mi><mo>&#x02212;</mo><mi>B</mi><mo>&#x0002E;</mo><mtext>prev\_size</mtext></mrow></math></div>
+<em>subtracting <code class="highlight">B</code>'s <code class="highlight">prev_size</code></em> from <code class="highlight">B</code>'s address — <code class="highlight">prev_chunk = &amp;B - B.prev_size</code>.</p>
 <p>Both inputs are attacker-reachable. The single null byte from an off-by-one clears
 <code class="highlight">PREV_INUSE</code>; and <code class="highlight">prev_size</code> lives in <code class="highlight">B</code>'s first quadword, which a heap overflow
-(or <code class="highlight">B</code>'s own contents, if it's the chunk before <code class="highlight">B</code> you control) can set. Make:</p>
-<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>B</mi><mo>&#x0002E;</mo><mtext>prev\_size</mtext><mo>&#x0003D;</mo><mi>&#x00026;</mi><mi>B</mi><mo>&#x02212;</mo><mi>&#x00026;</mi><mtext>fake</mtext></mrow></math></div>
-<p>and the consolidation reaches all the way to <code class="highlight">fake</code>.</p>
+(or <code class="highlight">B</code>'s own contents, if it's the chunk before <code class="highlight">B</code> you control) can set. Set
+<code class="highlight">B.prev_size = &amp;B - &amp;fake</code>, and the consolidation reaches all the way to <code class="highlight">fake</code>.</p>
 <figure class="codeblock codeblock--diff"><figcaption><span class="fname">what the off-by-one does to B</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#what-the-off-by-one-does-to-b-1">1</a></span>
 <span class="normal"><a href="#what-the-off-by-one-does-to-b-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="what-the-off-by-one-does-to-b-1"><span class="gd">- B.size = 0x...1     # PREV_INUSE set: prev chunk in use, no backward merge</span>
 </span><span id="what-the-off-by-one-does-to-b-2"><span class="gi">+ B.size = 0x...0     # one null byte: PREV_INUSE clear -&gt; &quot;prev chunk is free&quot;</span>
