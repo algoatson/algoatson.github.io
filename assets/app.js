@@ -102,13 +102,6 @@
   }
 
   let tocLinks = [], tocHeads = [];
-  // long series boxes are capped + scrollable; keep the current part in view.
-  function bootSeries() {
-    const list = $('.series__list'), cur = list && $('.cur', list);
-    if (cur && list.scrollHeight > list.clientHeight)
-      list.scrollTop = cur.offsetTop - (list.clientHeight - cur.offsetHeight) / 2;
-  }
-
   function bootToc() {
     tocLinks = []; tocHeads = [];
     const toc = $('.toc');
@@ -137,7 +130,7 @@
 
   addEventListener('scroll', () => { updateProgress(); spyToc(); }, { passive: true });
   addEventListener('resize', updateProgress);
-  bootToc(); bootSeries(); updateProgress();
+  bootToc(); updateProgress();
 
   /* ---- image lightbox (click to zoom; no JS = plain inline image) -------- */
   let lbEl = null, lbReturn = null;
@@ -362,7 +355,7 @@
   }
 
   /* ---- re-init page-local behavior after a client route change (preview) -- */
-  document.addEventListener('sf:route', () => { ri = -1; bindCopy(); bootTyped(); bootToc(); bootSeries(); updateProgress(); bootLightbox(); });
+  document.addEventListener('sf:route', () => { ri = -1; bindCopy(); bootTyped(); bootToc(); updateProgress(); bootLightbox(); });
 
   /* ---- expand collapsed <details> for printing, restore afterwards ------- */
   let printOpened = [];

@@ -472,18 +472,16 @@ aside.toc .toc { border: 0; padding: 0; background: transparent; }  /* inner md 
 .series__name { color: var(--ink); }
 .series__pos { margin-left: auto; font-size: 12px; color: var(--dim);
   font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* long series (10+ parts) would dominate the top of every post — cap the list and
-   let it scroll; app.js centres the current part. Short series never hit the cap. */
-.series__list { margin: 0; padding-left: 1.7em; color: var(--dim);
-  position: relative; max-height: 12.5em; overflow-y: auto;
-  scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-.series__list::-webkit-scrollbar { width: 9px; }
-.series__list::-webkit-scrollbar-thumb {
-  background-color: var(--line); border: 3px solid transparent; background-clip: padding-box; }
-.series__list li { margin: 3px 0; }
-.series__list li::marker { color: var(--faint); }
+/* the box lists EVERY part — it's a table of contents, so it shouldn't truncate.
+   numbers come from a CSS counter (not native <ol> markers) so they're right-
+   aligned and two-digit parts line up cleanly. */
+.series__list { margin: 0; padding-left: 0; color: var(--dim); list-style: none;
+  counter-reset: sx; }
+.series__list li { counter-increment: sx; margin: 3px 0; }
+.series__list li::before { content: counter(sx) "."; display: inline-block;
+  width: 1.9em; margin-right: .6em; text-align: right; color: var(--faint); }
 .series__list li.cur { color: var(--ink); font-weight: 600; }
-.series__list li.cur::marker { color: var(--accent); }
+.series__list li.cur::before { color: var(--accent); }
 
 /* ---- collapsible details / spoiler flag blocks --------------------------- */
 .prose details {
@@ -1030,13 +1028,6 @@ figure.img figcaption::before { content: "// "; color: var(--accent); font-famil
   }
 
   let tocLinks = [], tocHeads = [];
-  // long series boxes are capped + scrollable; keep the current part in view.
-  function bootSeries() {
-    const list = $('.series__list'), cur = list && $('.cur', list);
-    if (cur && list.scrollHeight > list.clientHeight)
-      list.scrollTop = cur.offsetTop - (list.clientHeight - cur.offsetHeight) / 2;
-  }
-
   function bootToc() {
     tocLinks = []; tocHeads = [];
     const toc = $('.toc');
@@ -1065,7 +1056,7 @@ figure.img figcaption::before { content: "// "; color: var(--accent); font-famil
 
   addEventListener('scroll', () => { updateProgress(); spyToc(); }, { passive: true });
   addEventListener('resize', updateProgress);
-  bootToc(); bootSeries(); updateProgress();
+  bootToc(); updateProgress();
 
   /* ---- image lightbox (click to zoom; no JS = plain inline image) -------- */
   let lbEl = null, lbReturn = null;
@@ -1290,7 +1281,7 @@ figure.img figcaption::before { content: "// "; color: var(--accent); font-famil
   }
 
   /* ---- re-init page-local behavior after a client route change (preview) -- */
-  document.addEventListener('sf:route', () => { ri = -1; bindCopy(); bootTyped(); bootToc(); bootSeries(); updateProgress(); bootLightbox(); });
+  document.addEventListener('sf:route', () => { ri = -1; bindCopy(); bootTyped(); bootToc(); updateProgress(); bootLightbox(); });
 
   /* ---- expand collapsed <details> for printing, restore afterwards ------- */
   let printOpened = [];
