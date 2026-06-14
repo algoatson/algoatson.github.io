@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the poison null byte — algoatson.github.io</title>
+<meta name="description" content="Part 8 — the most innocent-looking heap bug there is: one null byte written one byte too far. It lands on a neighbouring chunk&#x27;s size field, desyncs the allocator&#x27;s bookkeeping, and ends with two chunks overlapping the same memory.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/poison-null-byte/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the poison null byte — algoatson.github.io">
+<meta property="og:description" content="Part 8 — the most innocent-looking heap bug there is: one null byte written one byte too far. It lands on a neighbouring chunk&#x27;s size field, desyncs the allocator&#x27;s bookkeeping, and ends with two chunks overlapping the same memory.">
+<meta property="og:url" content="https://algoatson.github.io/p/poison-null-byte/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/poison-null-byte.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the poison null byte", "datePublished": "2026-06-14", "dateModified": "2026-06-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 8 — the most innocent-looking heap bug there is: one null byte written one byte too far. It lands on a neighbouring chunk's size field, desyncs the allocator's bookkeeping, and ends with two chunks overlapping the same memory.", "url": "https://algoatson.github.io/p/poison-null-byte/", "mainEntityOfPage": "https://algoatson.github.io/p/poison-null-byte/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the poison null byte</h1>
+  <div class="meta"><span>2026-06-14</span><span>3 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 8 of 9</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li><li><a href="/p/house-of-spirit/">the House of Spirit</a></li><li class="cur" aria-current="true">the poison null byte</li><li><a href="/p/the-house-of-orange/">the House of Orange</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#what-one-null-byte-does-to-a-size-field">what one null byte does to a size field</a></li>
+<li><a href="#from-desync-to-overlap">from desync to overlap</a></li>
+<li><a href="#why-overlap-is-game-over">why overlap is game over</a></li>
+<li><a href="#modern-status">modern status</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>A <code class="highlight">strcpy</code> into a heap buffer writes a terminating <code class="highlight">\x00</code>. If the buffer is exactly
+chunk-sized, that null lands <em>one byte past the end</em> — on the least-significant
+byte of the <strong>next chunk's size field</strong>. That single byte is enough. It's the
+off-by-one that turns a typo into overlapping chunks.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./nullbyte</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>off-by-one NULL overflow -&gt; size/prev_size desync -&gt; chunk overlap</dd></div><div><dt>classic killer</dt><dd>the 2.29 &quot;corrupted size vs. prev_size&quot; check</dd></div></dl></div></figure>
+<h2 id="what-one-null-byte-does-to-a-size-field">what one null byte does to a size field<a class="headerlink" href="#what-one-null-byte-does-to-a-size-field" title="Permanent link">#</a></h2>
+<p>Sizes are <code class="highlight">0x10</code>-aligned, so a chunk like <code class="highlight">0x511</code> (size <code class="highlight">0x510</code>, <code class="highlight">PREV_INUSE</code>
+set). Write <code class="highlight">\x00</code> over its low byte and it becomes <code class="highlight">0x500</code>:</p>
+<p><figure class="codeblock hexdump"><figcaption><span class="fname">next chunk&#x27;s size field — before the off-by-one</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  <mark>11</mark> 05 00 00 00 00 00 00  <span class="asc">|........<mark>.</mark>.......|</span></pre></div></figure>
+<figure class="codeblock hexdump"><figcaption><span class="fname">...and after one null byte spills into it</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  <mark>00</mark> 05 00 00 00 00 00 00  <span class="asc">|........<mark>.</mark>.......|</span></pre></div></figure></p>
+<p>Two things changed at once: <code class="highlight">PREV_INUSE</code> got cleared (now the allocator thinks the
+<em>previous</em> chunk is free), and the size shrank by <code class="highlight">0x10</code>. The allocator's mental
+map of the heap is now <strong>wrong by 16 bytes</strong> — and every overlap technique is just
+exploiting a map that disagrees with reality.</p>
+<h2 id="from-desync-to-overlap">from desync to overlap<a class="headerlink" href="#from-desync-to-overlap" title="Permanent link">#</a></h2>
+<p>The classic recipe ("shrink a free chunk") chains that desync into two live chunks
+sharing memory:</p>
+<ol>
+<li>Lay out three chunks — call them <strong>A</strong>, <strong>B</strong>, <strong>C</strong> — and free <strong>B</strong> so it sits
+   in the unsorted bin with a real size of <code class="highlight">0x510</code>.</li>
+<li>Off-by-one out of <strong>A</strong> nulls <strong>B</strong>'s size low byte: <code class="highlight">0x511 → 0x500</code>. The
+   allocator now believes <strong>B</strong> is <code class="highlight">0x500</code>, though it physically spans <code class="highlight">0x510</code>.</li>
+<li>Forge a <code class="highlight">prev_size</code> inside <strong>B</strong> (at offset <code class="highlight">0x4f0</code>) so that <strong>C</strong>'s backward
+   view points into the middle of <strong>B</strong>, not its true start.</li>
+<li>Allocate and free around the seam. When consolidation fires, glibc merges using
+   the <em>forged</em> boundaries, and you end up with one allocation <strong>overlapping</strong> a
+   still-live chunk.</li>
+</ol>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">the desync, in one line</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-desync-in-one-line-1">1</a></span>
+<span class="normal"><a href="#the-desync-in-one-line-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-desync-in-one-line-1"><span class="gd">- B.size == 0x510   and   C.prev_size == 0x510      # consistent: C knows where B ends</span>
+</span><span id="the-desync-in-one-line-2"><span class="gi">+ B.size == 0x500   and   C.prev_size == 0x510      # the lie: 16 bytes unaccounted for</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<div class="admonition warning">
+<p class="admonition-title">the exact sizes are a puzzle, not a constant</p>
+<p>Which sizes overlap cleanly depends on your libc and whether the tcache is in
+play — the <code class="highlight">0x510</code>/<code class="highlight">0x500</code> here is illustrative. Drive it in pwndbg with <code class="highlight">vis</code>
+and watch the chunk boundaries; the moment two chunks' user data visibly
+overlaps, you've won. Don't transplant offsets between challenges.</p>
+</div>
+<h2 id="why-overlap-is-game-over">why overlap is game over<a class="headerlink" href="#why-overlap-is-game-over" title="Permanent link">#</a></h2>
+<p>Once two chunks overlap, one of them controls the <em>other's metadata</em> while it's
+still live. That's the strongest position in heap exploitation: you can edit a
+free chunk's <code class="highlight">fd</code> to <a href="/p/tcache-poisoning-explained/">poison the tcache</a>, forge a
+size to reclaim libc pointers, or set up any later House. Overlap is rarely the
+exploit itself — it's the primitive that unlocks the real one.</p>
+<details class="spoiler">
+<summary>where it leads</summary>
+<p>Overlap a <code class="highlight">0x100</code> chunk over a freed tcache chunk, rewrite its <code class="highlight">fd</code> to
+<code class="highlight">__free_hook</code>, allocate twice, write <code class="highlight">system</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{0n3_byt3_t00_f4r}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="modern-status">modern status<a class="headerlink" href="#modern-status" title="Permanent link">#</a></h2>
+<p>glibc 2.29 added the check that specifically kills the shrink:</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">glibc 2.29 — malloc.c, on consolidation/free</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-229-mallocc-on-consolidationfree-1">1</a></span>
+<span class="normal"><a href="#glibc-229-mallocc-on-consolidationfree-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-229-mallocc-on-consolidationfree-1"><span class="gi">+  if (__glibc_unlikely (chunksize (p) != prev_size (next_chunk (p))))</span>
+</span><span id="glibc-229-mallocc-on-consolidationfree-2"><span class="gi">+    malloc_printerr (&quot;corrupted size vs. prev_size&quot;);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>A chunk's size must agree with the <code class="highlight">prev_size</code> its neighbour records — exactly the
+invariant the poison null byte breaks. So the textbook version is <code class="highlight">≤ 2.28</code>. The
+<em>idea</em> outlives the patch, though: <a href="/p/the-house-of-orange/">the House of Einherjar</a>
+and several modern off-by-null variants still start from "one byte clears
+<code class="highlight">PREV_INUSE</code>." Next, the capstone — <a href="/p/the-house-of-orange/">the House of Orange</a>,
+which gets a free chunk and a shell <strong>without ever calling <code class="highlight">free</code></strong>.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/house-of-spirit/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Spirit</span><span class="row__min">4 min</span></a><a class="row" href="/p/the-house-of-orange/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Orange</span><span class="row__min">4 min</span></a><a class="row" href="/p/the-unsorted-bin-attack/"><span class="row__date">2026-06-13</span><span class="row__tag">heap</span><span class="row__title">the unsorted bin attack</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/house-of-spirit/"><span class="lbl">&#8249; newer</span>the House of Spirit</a><a class="next" href="/p/the-house-of-orange/"><span class="lbl">older &#8250;</span>the House of Orange</a></nav></main>
+
+    <footer class="status">
+      <span>23 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

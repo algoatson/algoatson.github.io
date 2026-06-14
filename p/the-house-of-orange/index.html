@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the House of Orange — algoatson.github.io</title>
+<meta name="description" content="Part 9, the capstone — no free() in the binary at all. Force malloc to free the top chunk for you, leak libc from it, then turn the unsorted bin attack into a forged FILE struct whose vtable call drops a shell. Heap meets FSOP.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/the-house-of-orange/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the House of Orange — algoatson.github.io">
+<meta property="og:description" content="Part 9, the capstone — no free() in the binary at all. Force malloc to free the top chunk for you, leak libc from it, then turn the unsorted bin attack into a forged FILE struct whose vtable call drops a shell. Heap meets FSOP.">
+<meta property="og:url" content="https://algoatson.github.io/p/the-house-of-orange/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/the-house-of-orange.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the House of Orange", "datePublished": "2026-06-14", "dateModified": "2026-06-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 9, the capstone — no free() in the binary at all. Force malloc to free the top chunk for you, leak libc from it, then turn the unsorted bin attack into a forged FILE struct whose vtable call drops a shell. Heap meets FSOP.", "url": "https://algoatson.github.io/p/the-house-of-orange/", "mainEntityOfPage": "https://algoatson.github.io/p/the-house-of-orange/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the House of Orange</h1>
+  <div class="meta"><span>2026-06-14</span><span>4 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 9 of 9</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li><li><a href="/p/house-of-spirit/">the House of Spirit</a></li><li><a href="/p/poison-null-byte/">the poison null byte</a></li><li class="cur" aria-current="true">the House of Orange</li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#step-1-make-malloc-free-the-top-chunk-for-you">step 1 — make malloc free the top chunk for you</a></li>
+<li><a href="#step-2-unsorted-bin-attack-into-_io_list_all">step 2 — unsorted bin attack into _IO_list_all</a></li>
+<li><a href="#step-3-the-vtable-call">step 3 — the vtable call</a></li>
+<li><a href="#modern-status">modern status</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Every technique so far assumed you could <code class="highlight">free</code>. The House of Orange is the answer
+to the cruel challenge that gives you <strong>only <code class="highlight">malloc</code> and an overflow</strong> — no
+<code class="highlight">free</code> anywhere. It's the capstone because it stitches the whole series together:
+the top chunk (Part 1), the unsorted bin (Part 5), and a detour into file-stream
+exploitation (FSOP) for the kill.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./orange</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.23  (classic; 2.24&#x27;s vtable check changed the FILE half)</dd></div><div><dt>technique</dt><dd>forge top size -&gt; sysmalloc frees top -&gt; unsorted bin attack -&gt; fake FILE</dd></div><div><dt>needs</dt><dd>NO free() — that&#x27;s the entire point</dd></div></dl></div></figure>
+<h2 id="step-1-make-malloc-free-the-top-chunk-for-you">step 1 — make malloc free the top chunk for you<a class="headerlink" href="#step-1-make-malloc-free-the-top-chunk-for-you" title="Permanent link">#</a></h2>
+<p>When a request is too big for the top chunk, <code class="highlight">malloc</code> calls <code class="highlight">sysmalloc</code> to grow
+the heap. And <code class="highlight">sysmalloc</code>, rather than waste the old wilderness, <strong>frees the old
+top chunk into the unsorted bin</strong>. That's a <code class="highlight">free</code> you didn't call.</p>
+<p>To trigger it deliberately: overflow the top chunk's size down to a small, <em>valid</em>
+value, then request something larger than it.</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">top chunk size forged down — PREV_INUSE set, ends on a page boundary</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  41 41 41 41 41 41 41 41  <mark>01</mark> <mark>0c</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|AAAAAAAA<mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span></pre></div></figure>
+<p>The forged size (<code class="highlight">0xc01</code> here) has to satisfy <code class="highlight">sysmalloc</code>'s bookkeeping: bigger
+than the minimum chunk, smaller than your upcoming request, <code class="highlight">PREV_INUSE</code> set, and —
+the fiddly one — the old top must <strong>end on a page boundary</strong> so the new heap lines
+up. Get it right and one oversized <code class="highlight">malloc</code> files the old top chunk into the
+unsorted bin.</p>
+<div class="admonition tip">
+<p class="admonition-title">you just got a chunk and a leak for free</p>
+<p>That freed top chunk now has <code class="highlight">fd</code>/<code class="highlight">bk</code> pointing into libc (the unsorted bin
+head). If you can read it back, that's your <strong>libc base</strong> — the leak half of the
+exploit, with no info-leak bug required. The House of Orange is as much a
+leak primitive as an RCE one.</p>
+</div>
+<h2 id="step-2-unsorted-bin-attack-into-_io_list_all">step 2 — unsorted bin attack into _IO_list_all<a class="headerlink" href="#step-2-unsorted-bin-attack-into-_io_list_all" title="Permanent link">#</a></h2>
+<p>Now you have a freed unsorted chunk, so you're back on familiar ground: the
+<a href="/p/the-unsorted-bin-attack/">unsorted bin attack</a>. Overwrite the chunk's <code class="highlight">bk</code> so
+the next allocation writes the unsorted-bin pointer over <strong><code class="highlight">_IO_list_all</code></strong> — the
+head of glibc's linked list of open <code class="highlight">FILE</code> streams.</p>
+<p>The same overflow shapes the chunk's data into a <strong>fake <code class="highlight">FILE</code> struct</strong> (an
+<code class="highlight">_IO_FILE_plus</code>). The unsorted bin attack leaves <code class="highlight">_IO_list_all</code> pointing at the
+main arena, but you arrange the chunk so the list walk lands on <em>your</em> fake FILE
+(the classic trick: a fake file sized into the <code class="highlight">0x60</code> smallbin so <code class="highlight">bin[4]</code> —
+reachable from the arena — points at it).</p>
+<h2 id="step-3-the-vtable-call">step 3 — the vtable call<a class="headerlink" href="#step-3-the-vtable-call" title="Permanent link">#</a></h2>
+<p>The trap springs when glibc next flushes its streams — on <code class="highlight">exit</code>, or when the next
+corrupted <code class="highlight">malloc</code> aborts. <code class="highlight">_IO_flush_all_lockp</code> walks <code class="highlight">_IO_list_all</code> and, for each
+stream that needs flushing, calls a function <strong>through the FILE's vtable</strong>:</p>
+<figure class="codeblock"><figcaption><span class="fname">glibc — _IO_flush_all_lockp, roughly</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-io-flush-all-lockp-roughly-1">1</a></span>
+<span class="normal"><a href="#glibc-io-flush-all-lockp-roughly-2">2</a></span>
+<span class="normal"><a href="#glibc-io-flush-all-lockp-roughly-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-io-flush-all-lockp-roughly-1"><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">fp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_IO_list_all</span><span class="p">;</span><span class="w"> </span><span class="n">fp</span><span class="p">;</span><span class="w"> </span><span class="n">fp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fp</span><span class="o">-&gt;</span><span class="n">_chain</span><span class="p">)</span>
+</span><span id="glibc-io-flush-all-lockp-roughly-2"><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="w"> </span><span class="cm">/* fp has buffered output */</span><span class="w"> </span><span class="p">)</span>
+</span><span id="glibc-io-flush-all-lockp-roughly-3"><span class="w">        </span><span class="n">_IO_OVERFLOW</span><span class="w"> </span><span class="p">(</span><span class="n">fp</span><span class="p">,</span><span class="w"> </span><span class="n">EOF</span><span class="p">);</span><span class="w">   </span><span class="c1">// == (*fp-&gt;vtable-&gt;__overflow)(fp, EOF)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Forge <code class="highlight">fp-&gt;vtable</code> to point at memory you control, put <code class="highlight">system</code> where <code class="highlight">__overflow</code>
+is read, and arrange <code class="highlight">fp</code> to begin with <code class="highlight">&quot;/bin/sh&quot;</code> (it's passed as the first
+argument). The flush calls <code class="highlight">system(&quot;/bin/sh&quot;)</code>.</p>
+<figure class="codeblock"><figcaption><span class="fname">orange.py — the shape of it</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#orangepy-the-shape-of-it-1"> 1</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-2"> 2</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-3"> 3</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-4"> 4</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-5"> 5</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-6"> 6</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-7"> 7</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-8"> 8</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-9"> 9</a></span>
+<span class="normal"><a href="#orangepy-the-shape-of-it-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="orangepy-the-shape-of-it-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="orangepy-the-shape-of-it-2"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./orange&quot;</span><span class="p">);</span> <span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">,</span> <span class="n">checksec</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="orangepy-the-shape-of-it-3">
+</span><span id="orangepy-the-shape-of-it-4"><span class="hll"><span class="n">overflow_top</span><span class="p">(</span><span class="n">p64</span><span class="p">(</span><span class="mh">0xc01</span><span class="p">))</span>                 <span class="c1"># forge top size, page-aligned end</span>
+</span></span><span id="orangepy-the-shape-of-it-5"><span class="n">huge_alloc</span><span class="p">()</span>                             <span class="c1"># sysmalloc frees old top -&gt; unsorted bin</span>
+</span><span id="orangepy-the-shape-of-it-6"><span class="n">libc</span><span class="o">.</span><span class="n">address</span> <span class="o">=</span> <span class="n">leak_unsorted</span><span class="p">()</span> <span class="o">-</span> <span class="mh">0x3c4b78</span>
+</span><span id="orangepy-the-shape-of-it-7"><span class="hll">
+</span></span><span id="orangepy-the-shape-of-it-8"><span class="hll"><span class="n">fake</span> <span class="o">=</span> <span class="n">make_fake_file</span><span class="p">(</span><span class="n">libc</span><span class="p">)</span>              <span class="c1"># _chain, _IO_write_*, vtable -&gt; system</span>
+</span></span><span id="orangepy-the-shape-of-it-9"><span class="n">overflow_into_unsorted</span><span class="p">(</span><span class="n">bk</span><span class="o">=</span><span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;_IO_list_all&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="mh">0x10</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">fake</span><span class="p">)</span>
+</span><span id="orangepy-the-shape-of-it-10"><span class="n">trigger_flush</span><span class="p">()</span>                          <span class="c1"># malloc error / exit -&gt; vtable call -&gt; shell</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the shell</summary>
+<p>The next allocation errors out, glibc tries to flush streams, walks the forged
+<code class="highlight">_IO_list_all</code>, and calls into your fake vtable:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{n0_fr33_n0_pr0bl3m}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="modern-status">modern status<a class="headerlink" href="#modern-status" title="Permanent link">#</a></h2>
+<p>The classic is <code class="highlight">≤ 2.23</code>. glibc <strong>2.24</strong> added the check that reshaped FSOP forever:</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">glibc 2.24 — genops.c</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-224-genopsc-1">1</a></span>
+<span class="normal"><a href="#glibc-224-genopsc-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-224-genopsc-1"><span class="gi">+  /* a vtable pointer must point inside the __libc_IO_vtables section */</span>
+</span><span id="glibc-224-genopsc-2"><span class="gi">+  IO_validate_vtable (fp-&gt;vtable);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>You can no longer point the vtable at arbitrary memory. The technique didn't die —
+it <em>mutated</em>: aim the vtable at a <strong>legitimate</strong> glibc vtable whose function does
+something useful (<code class="highlight">_IO_str_overflow</code> via <code class="highlight">_IO_str_jumps</code>), which is the modern
+House of Orange. Later libc (≥ 2.34, hooks gone) pushed everyone further into
+pure-FSOP families like the <strong>House of Apple</strong> — but they all begin exactly here:
+<em>the file-stream list is reachable, and glibc calls through it on the way out.</em></p>
+<p>That closes the series. From <a href="/p/glibc-heap-internals/">a chunk's size field</a> to a
+forged <code class="highlight">FILE</code> vtable — nine parts, and every one of them is the same move:
+<strong><code class="highlight">malloc</code> trusts metadata, so lie to it.</strong></p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/house-of-spirit/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the House of Spirit</span><span class="row__min">4 min</span></a><a class="row" href="/p/poison-null-byte/"><span class="row__date">2026-06-14</span><span class="row__tag">heap</span><span class="row__title">the poison null byte</span><span class="row__min">3 min</span></a><a class="row" href="/p/the-unsorted-bin-attack/"><span class="row__date">2026-06-13</span><span class="row__tag">heap</span><span class="row__title">the unsorted bin attack</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/poison-null-byte/"><span class="lbl">&#8249; newer</span>the poison null byte</a><a class="next" href="/p/the-unsorted-bin-attack/"><span class="lbl">older &#8250;</span>the unsorted bin attack</a></nav></main>
+
+    <footer class="status">
+      <span>23 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

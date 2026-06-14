@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://algoatson.github.io/</loc><lastmod>2026-06-13</lastmod></url>
+  <url><loc>https://algoatson.github.io/</loc><lastmod>2026-06-14</lastmod></url>
   <url><loc>https://algoatson.github.io/page/2/</loc></url>
   <url><loc>https://algoatson.github.io/page/3/</loc></url>
+  <url><loc>https://algoatson.github.io/p/house-of-spirit/</loc><lastmod>2026-06-14</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/poison-null-byte/</loc><lastmod>2026-06-14</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/the-house-of-orange/</loc><lastmod>2026-06-14</lastmod></url>
   <url><loc>https://algoatson.github.io/p/the-unsorted-bin-attack/</loc><lastmod>2026-06-13</lastmod></url>
   <url><loc>https://algoatson.github.io/p/unsafe-unlink/</loc><lastmod>2026-06-12</lastmod></url>
   <url><loc>https://algoatson.github.io/p/fastbin-dup/</loc><lastmod>2026-06-11</lastmod></url>

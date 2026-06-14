@@ -6,7 +6,31 @@
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
     <description>reverse engineering / binary exploitation / ctf</description>
     <language>en</language>
-    <lastBuildDate>Sun, 14 Jun 2026 21:34:42 +0000</lastBuildDate>
+    <lastBuildDate>Sun, 14 Jun 2026 21:40:56 +0000</lastBuildDate>
+    <item>
+      <title>the House of Spirit</title>
+      <link>https://algoatson.github.io/p/house-of-spirit/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/house-of-spirit/</guid>
+      <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 7 — instead of corrupting a real chunk, you forge a fake one in memory you already control and trick free() into filing it away. The next malloc hands it right back, so you get malloc to return the stack.</description>
+    </item>
+    <item>
+      <title>the poison null byte</title>
+      <link>https://algoatson.github.io/p/poison-null-byte/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/poison-null-byte/</guid>
+      <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 8 — the most innocent-looking heap bug there is: one null byte written one byte too far. It lands on a neighbouring chunk&#x27;s size field, desyncs the allocator&#x27;s bookkeeping, and ends with two chunks overlapping the same memory.</description>
+    </item>
+    <item>
+      <title>the House of Orange</title>
+      <link>https://algoatson.github.io/p/the-house-of-orange/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/the-house-of-orange/</guid>
+      <pubDate>Sun, 14 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 9, the capstone — no free() in the binary at all. Force malloc to free the top chunk for you, leak libc from it, then turn the unsorted bin attack into a forged FILE struct whose vtable call drops a shell. Heap meets FSOP.</description>
+    </item>
     <item>
       <title>the unsorted bin attack</title>
       <link>https://algoatson.github.io/p/the-unsorted-bin-attack/</link>
