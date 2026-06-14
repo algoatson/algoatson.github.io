@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the glibc heap, from the chunk up — algoatson.github.io</title>
+<meta name="description" content="Part 1 of the heap series — the only internals that matter for exploitation: chunk anatomy, the size field&#x27;s flag bits, and the six places a free chunk can live (tcache, fastbins, unsorted, small, large, top). Everything later is corrupting one of these on purpose.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/glibc-heap-internals/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the glibc heap, from the chunk up — algoatson.github.io">
+<meta property="og:description" content="Part 1 of the heap series — the only internals that matter for exploitation: chunk anatomy, the size field&#x27;s flag bits, and the six places a free chunk can live (tcache, fastbins, unsorted, small, large, top). Everything later is corrupting one of these on purpose.">
+<meta property="og:url" content="https://algoatson.github.io/p/glibc-heap-internals/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/glibc-heap-internals.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the glibc heap, from the chunk up", "datePublished": "2026-06-08", "dateModified": "2026-06-08", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 1 of the heap series — the only internals that matter for exploitation: chunk anatomy, the size field's flag bits, and the six places a free chunk can live (tcache, fastbins, unsorted, small, large, top). Everything later is corrupting one of these on purpose.", "url": "https://algoatson.github.io/p/glibc-heap-internals/", "mainEntityOfPage": "https://algoatson.github.io/p/glibc-heap-internals/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the glibc heap, from the chunk up</h1>
+  <div class="meta"><span>2026-06-08</span><span>6 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 1 of 6</span></div><ol class="series__list"><li class="cur" aria-current="true">the glibc heap, from the chunk up</li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#a-chunk-is-a-size-field-and-some-data">a chunk is a size field and some data</a></li>
+<li><a href="#a-free-chunk-is-a-linked-list-node">a free chunk is a linked-list node</a></li>
+<li><a href="#the-six-homes-of-a-free-chunk">the six homes of a free chunk</a></li>
+<li><a href="#the-bins-one-paragraph-each">the bins, one paragraph each</a></li>
+<li><a href="#the-mitigations-youll-keep-hitting">the mitigations you'll keep hitting</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>You can't corrupt what you can't see. Every heap technique in this series is just
+a <em>lie</em> told to <code class="highlight">malloc</code> about its own metadata — so before any of that, this is
+the metadata, drawn byte by byte. No exhaustive <code class="highlight">malloc.c</code> tour; only the parts
+you'll be overwriting.</p>
+<p>(Pair this with the <a href="/p/pwndbg-muscle-memory/">pwndbg commands</a> for reading heap
+state live — <code class="highlight">vis</code>, <code class="highlight">bins</code>, <code class="highlight">heap</code> are how you'll watch all of this happen.)</p>
+<h2 id="a-chunk-is-a-size-field-and-some-data">a chunk is a size field and some data<a class="headerlink" href="#a-chunk-is-a-size-field-and-some-data" title="Permanent link">#</a></h2>
+<p><code class="highlight">malloc</code> deals in <strong>chunks</strong>: an 8-byte <code class="highlight">prev_size</code>, an 8-byte <code class="highlight">size</code>, then your
+data. The pointer <code class="highlight">malloc</code> hands you points at the data — the size field sits
+<code class="highlight">0x10</code> bytes <em>behind</em> it. An allocated <code class="highlight">0x90</code> chunk full of <code class="highlight">A</code>s:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">an allocated chunk — malloc(0x88) returned data+0x10</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  <mark>91</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|........<mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span>
+<span class="off">00000010</span>  41 41 41 41 41 41 41 41  41 41 41 41 41 41 41 41  <span class="asc">|AAAAAAAAAAAAAAAA|</span></pre></div></figure>
+<p>The size reads <code class="highlight">0x91</code>, not <code class="highlight">0x90</code>. Sizes are always <code class="highlight">0x10</code>-aligned, so the low
+nibble is free for <strong>flags</strong> — and <code class="highlight">0x91 = 0x90 | 1</code>. That <code class="highlight">1</code> is <code class="highlight">PREV_INUSE</code>.
+Three flags live in those low bits:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">bit</th>
+<th>flag</th>
+<th>meaning when set</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;"><code class="highlight">1</code></td>
+<td><code class="highlight">PREV_INUSE</code></td>
+<td>the <em>previous</em> (lower-address) chunk is in use</td>
+</tr>
+<tr>
+<td style="text-align: right;"><code class="highlight">2</code></td>
+<td><code class="highlight">IS_MMAPPED</code></td>
+<td>chunk came from <code class="highlight">mmap</code>, not the heap</td>
+</tr>
+<tr>
+<td style="text-align: right;"><code class="highlight">4</code></td>
+<td><code class="highlight">NON_MAIN_ARENA</code></td>
+<td>chunk belongs to a thread arena, not the main one</td>
+</tr>
+</tbody>
+</table>
+<p>The size you ask for is rounded up to a real chunk size — request plus the 8-byte
+header, aligned to 16, floored at <code class="highlight">0x20</code>:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>chunksize</mtext><mo stretchy="false">&#x00028;</mo><mi>n</mi><mo stretchy="false">&#x00029;</mo><mo>&#x0003D;</mo><mo>max</mo><mspace width="negativethinmathspace" /><mo minsize="1.2em" maxsize="1.2em">(</mo><mn>0</mn><mi>x</mi><mn>20</mn><mo>&#x0002C;</mo><mtext>&#x000A0;</mtext><mo stretchy="false">&#x00028;</mo><mi>n</mi><mo>&#x0002B;</mo><mn>8</mn><mo>&#x0002B;</mo><mn>0</mn><mi>x</mi><mi>f</mi><mo stretchy="false">&#x00029;</mo><mtext>&#x000A0;</mtext><mi>&#x00026;</mi><mtext>&#x000A0;</mtext><mi><mrow><mi>&#x0007E;</mi></mrow></mi><mn>0</mn><mi>x</mi><mi>f</mi><mo minsize="1.2em" maxsize="1.2em">)</mo></mrow></math></div>
+<p>So <code class="highlight">malloc(24)</code> and <code class="highlight">malloc(0x18)</code> both give you a <code class="highlight">0x20</code> chunk; <code class="highlight">malloc(0x88)</code>
+gives <code class="highlight">0x90</code>. Internalise this — half of heap exploitation is landing a fake
+chunk on a size that passes a bin's checks.</p>
+<div class="admonition note">
+<p class="admonition-title">prev_size is shared</p>
+<p><code class="highlight">prev_size</code> only means anything when the previous chunk is <em>free</em> (its
+<code class="highlight">PREV_INUSE</code> is clear in <em>this</em> chunk's size). While the previous chunk is in
+use, those 8 bytes are fair game — the previous chunk's data spills into them.
+That overlap is the entire basis of the unlink and poison-null-byte families.</p>
+</div>
+<h2 id="a-free-chunk-is-a-linked-list-node">a free chunk is a linked-list node<a class="headerlink" href="#a-free-chunk-is-a-linked-list-node" title="Permanent link">#</a></h2>
+<p>Free a chunk and <code class="highlight">malloc</code> reclaims its (now unused) data as list pointers. The
+first two quadwords become <code class="highlight">fd</code> and <code class="highlight">bk</code>; for big chunks the next two become the
+<code class="highlight">fd_nextsize</code>/<code class="highlight">bk_nextsize</code> skip-list. Here's that same chunk after <code class="highlight">free()</code>,
+linked into the unsorted bin — <code class="highlight">fd</code> and <code class="highlight">bk</code> now point back into libc's arena:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">the same chunk, freed — fd/bk overwrite the old data</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  91 00 00 00 00 00 00 00  <span class="asc">|................|</span>
+<span class="off">00000010</span>  <mark>60</mark> <mark>87</mark> <mark>ec</mark> <mark>f7</mark> <mark>ff</mark> <mark>7f</mark> <mark>00</mark> <mark>00</mark>  <mark>60</mark> <mark>87</mark> <mark>ec</mark> <mark>f7</mark> <mark>ff</mark> <mark>7f</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|<mark>`</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>`</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span></pre></div></figure>
+<p>Those <code class="highlight">0x7fff...</code> values are libc addresses — which is why a single freed,
+leaked chunk hands you a libc base. The size field survives the free untouched;
+that's the field every technique forges.</p>
+<h2 id="the-six-homes-of-a-free-chunk">the six homes of a free chunk<a class="headerlink" href="#the-six-homes-of-a-free-chunk" title="Permanent link">#</a></h2>
+<p>When you <code class="highlight">free</code> a chunk it doesn't vanish — it gets filed into one of six
+structures, chosen by size and what's already full. Knowing <em>which</em> bin catches a
+free, and in what order <code class="highlight">malloc</code> searches them, is the whole game:</p>
+<table>
+<thead>
+<tr>
+<th>bin</th>
+<th>structure</th>
+<th>sizes (default)</th>
+<th>order</th>
+<th>consolidates?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>tcache</strong></td>
+<td>singly-linked, LIFO</td>
+<td><code class="highlight">0x20</code>–<code class="highlight">0x410</code></td>
+<td>LIFO</td>
+<td>no</td>
+</tr>
+<tr>
+<td><strong>fastbins</strong></td>
+<td>singly-linked, LIFO</td>
+<td><code class="highlight">0x20</code>–<code class="highlight">0x80</code></td>
+<td>LIFO</td>
+<td>no¹</td>
+</tr>
+<tr>
+<td><strong>unsorted</strong></td>
+<td>doubly-linked</td>
+<td>any</td>
+<td>FIFO-ish</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><strong>smallbins</strong></td>
+<td>doubly-linked</td>
+<td><code class="highlight">0x20</code>–<code class="highlight">0x3f0</code></td>
+<td>FIFO</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><strong>largebins</strong></td>
+<td>doubly-linked + skip list</td>
+<td><code class="highlight">≥ 0x400</code></td>
+<td>size-sorted</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><strong>top</strong></td>
+<td>the wilderness</td>
+<td>whatever's left</td>
+<td>—</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>¹ fastbins skip consolidation until <code class="highlight">malloc_consolidate</code> sweeps them into the
+unsorted bin (triggered by a large request or <code class="highlight">free</code> of a large chunk).</p>
+<p>The order matters because exploitation lives in the gaps:</p>
+<ul>
+<li><strong><code class="highlight">free</code> path:</strong> tcache first (if the size has a tcachebin with a free slot) →
+  else fastbin (if in fast range) → else unsorted. Forward/backward
+  consolidation happens <em>before</em> a chunk reaches the unsorted bin.</li>
+<li><strong><code class="highlight">malloc</code> path:</strong> tcache → fastbin (if in range) → smallbin (exact) → then a
+  pass over the <strong>unsorted bin</strong> (sorting everything it doesn't use into small/large)
+  → largebins → top.</li>
+</ul>
+<p>That unsorted-bin pass is where freed chunks get <em>sorted</em>, and it's the busiest
+crossroads in the allocator — the unsortedbin attack and House of Orange both
+hijack it.</p>
+<h2 id="the-bins-one-paragraph-each">the bins, one paragraph each<a class="headerlink" href="#the-bins-one-paragraph-each" title="Permanent link">#</a></h2>
+<p><strong>tcache</strong> (glibc ≥ 2.26) — a per-thread cache that front-runs everything. 64
+bins, one per size from <code class="highlight">0x20</code> to <code class="highlight">0x410</code>, <strong>7 chunks each</strong> by default,
+singly-linked through <code class="highlight">fd</code>. It barely checks anything, which is exactly why
+<a href="/p/tcache-poisoning-explained/">tcache poisoning</a> is the friendliest primitive
+there is. Since 2.29 each free chunk also stores a <code class="highlight">key</code> (a pointer to the tcache
+struct) so a naive double-free is caught.</p>
+<p><strong>fastbins</strong> — singly-linked LIFO for small chunks (<code class="highlight">0x20</code>–<code class="highlight">0x80</code>), <em>no</em>
+consolidation, so freed fastchunks sit there ready to be re-handed-out fast. The
+only free-time check is "is the chunk I'm freeing already the head?" — trivially
+sidestepped, which is the fastbin dup.</p>
+<p><strong>unsorted bin</strong> — one doubly-linked list that everything too big for tcache/fast
+lands in first. <code class="highlight">malloc</code> drains it lazily, sorting as it goes. A freed unsorted
+chunk's <code class="highlight">bk</code> points at the bin head in libc — corrupt it and the <em>next</em> malloc
+writes a libc pointer wherever you aimed.</p>
+<p><strong>smallbins / largebins</strong> — the sorted, doubly-linked long-term storage.
+Doubly-linked means <code class="highlight">unlink</code>, and <code class="highlight">unlink</code> was the original arbitrary write
+(more in Part 4). Largebins add the <code class="highlight">fd_nextsize</code>/<code class="highlight">bk_nextsize</code> skip list, a
+second pair of pointers you can abuse.</p>
+<p><strong>top chunk</strong> (the "wilderness") — the single chunk bordering unused memory,
+served only when no bin can. Its size is just "how much room is left," which is
+why overwriting it with <code class="highlight">-1</code> (the House of Force) used to let you allocate
+anywhere.</p>
+<h2 id="the-mitigations-youll-keep-hitting">the mitigations you'll keep hitting<a class="headerlink" href="#the-mitigations-youll-keep-hitting" title="Permanent link">#</a></h2>
+<p>Every technique below has an expiry date stamped by a glibc check. The ones that
+shape modern heap pwn:</p>
+<ul>
+<li><strong>tcache double-free key</strong> (2.29) — that <code class="highlight">key</code> field; bypassed by clobbering it.</li>
+<li><strong>tcache/fastbin alignment check</strong> (2.32) — a chunk handed out from these bins
+  must be <code class="highlight">0x10</code>-aligned, killing lazy "misaligned fake chunk" tricks.</li>
+<li><strong>safe-linking</strong> (2.32) — <code class="highlight">fd</code> in tcache/fastbins is stored <em>mangled</em> as
+  <code class="highlight">(&amp;fd &gt;&gt; 12) ^ ptr</code>. Overwriting <code class="highlight">fd</code> now needs a heap leak to compute the mask.</li>
+<li><strong>top size sanity</strong> (2.29) — <code class="highlight">malloc</code> rejects a top chunk whose size exceeds the
+  arena's <code class="highlight">system_mem</code>, which is what retired the House of Force.</li>
+</ul>
+<div class="admonition tip">
+<p class="admonition-title">know your libc version before you pick a technique</p>
+<p><code class="highlight">checksec</code> won't tell you the glibc version; <code class="highlight">./libc.so.6</code> will (<code class="highlight">strings -alibc.so.6 | grep &quot;GNU C Library&quot;</code>). The same bug wants a different technique on
+2.23 vs 2.27 vs 2.35 — picking the wrong one is the most common reason a "known"
+attack just errors out.</p>
+</div>
+<p>That's the whole board. The rest of the series is moves on it: <a href="/p/house-of-force/">House of
+Force</a> bends the top chunk, <a href="/p/fastbin-dup/">fastbin
+dup</a> abuses the LIFO, <a href="/p/unsafe-unlink/">unsafe unlink</a> weaponises
+the doubly-linked lists, and <a href="/p/tcache-poisoning-explained/">tcache poisoning</a> is
+the one you'll actually reach for first.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/the-unsorted-bin-attack/"><span class="row__date">2026-06-13</span><span class="row__tag">heap</span><span class="row__title">the unsorted bin attack</span><span class="row__min">4 min</span></a><a class="row" href="/p/unsafe-unlink/"><span class="row__date">2026-06-12</span><span class="row__tag">heap</span><span class="row__title">unsafe unlink (and the safe-unlink bypass)</span><span class="row__min">5 min</span></a><a class="row" href="/p/fastbin-dup/"><span class="row__date">2026-06-11</span><span class="row__tag">heap</span><span class="row__title">fastbin dup</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/house-of-force/"><span class="lbl">&#8249; newer</span>the House of Force</a><a class="next" href="/p/rizin-radare2-in-anger/"><span class="lbl">older &#8250;</span>rizin and radare2 in anger</a></nav></main>
+
+    <footer class="status">
+      <span>20 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

