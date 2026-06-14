@@ -603,7 +603,9 @@ html[data-crt="on"] body::after {
 
 /* ---- math (build-time MathML; the browser renders it, we just space it) -- */
 .math { color: var(--ink); }
-.math math { font-size: 1.05em; }
+/* the browser's default math font is a thin serif; bump the size so glyphs — and
+   especially the auto-shrunk sub/superscripts — stay legible on the dark pane. */
+.math math { font-size: 1.18em; }
 .math-block { margin: 1.5em 0; overflow-x: auto; overflow-y: hidden; text-align: center; }
 .math-block math { display: block; }
 .math .tex { font-style: italic; }   /* fallback when latex2mathml is unavailable */
