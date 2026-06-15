@@ -4,9 +4,9 @@
     <title>algoatson.github.io</title>
     <link>https://algoatson.github.io/</link>
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.</description>
+    <description>The data-only path overwrites modprobe_path; the code path hijacks kernel control flow to run commit_creds(prepare_kernel_cred(0)) and returns to a root shell. Here&#x27;s that path, and the four mitigations — SMEP, SMAP, KPTI, KASLR — you step over to walk it.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 14:25:34 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 15:04:12 +0000</lastBuildDate>
     <item>
       <title>House of Apple 2 — FSOP after the hooks died</title>
       <link>https://algoatson.github.io/p/house-of-apple-2/</link>
@@ -128,6 +128,22 @@
       <description>Part 1 of the heap series — the only internals that matter for exploitation: chunk anatomy, the size field&#x27;s flag bits, and the six places a free chunk can live (tcache, fastbins, unsorted, small, large, top). Everything later is corrupting one of these on purpose.</description>
     </item>
     <item>
+      <title>CET — shadow stacks, IBT, and what still works</title>
+      <link>https://algoatson.github.io/p/cet-shadow-stack-ibt/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/cet-shadow-stack-ibt/</guid>
+      <pubDate>Fri, 05 Jun 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>internals</category>
+      <description>Intel CET puts return addresses on a second, hardware-protected stack and demands every indirect branch land on an endbr64. That ends classic ROP and JOP. It does not end exploitation — whole-function calls, data-only attacks, and the occasional shadow-stack write all walk right past it.</description>
+    </item>
+    <item>
+      <title>the tcache stashing unlink attack</title>
+      <link>https://algoatson.github.io/p/tcache-stashing-unlink/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/tcache-stashing-unlink/</guid>
+      <pubDate>Thu, 04 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category>
+      <description>When a smallbin serves a request, glibc stashes the leftover chunks into the tcache — and that stashing does a doubly-linked-list unlink with a far weaker check than the real thing. Corrupt one bk pointer and you get a libc write and an allocation at an address you choose.</description>
+    </item>
+    <item>
       <title>PAC and MTE — how ARM64&#x27;s new walls fall</title>
       <link>https://algoatson.github.io/p/arm64-pac-and-mte/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/arm64-pac-and-mte/</guid>
@@ -216,36 +232,20 @@
       <description>A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.</description>
     </item>
     <item>
+      <title>userfaultfd &amp; FUSE — freezing a race until it&#x27;s deterministic</title>
+      <link>https://algoatson.github.io/p/userfaultfd-fuse-race-windows/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/userfaultfd-fuse-race-windows/</guid>
+      <pubDate>Mon, 20 Apr 2026 00:00:00 +0000</pubDate>
+      <category>kernel</category><category>pwn</category>
+      <description>A UAF that needs you to reallocate in a microsecond window is a coin flip — unless you can pause the kernel mid-copy. userfaultfd (and FUSE, when it&#x27;s locked down) let a page fault block in your own handler, stretching a hopeless race into a step you control.</description>
+    </item>
+    <item>
       <title>kernel LPE — commit_creds(prepare_kernel_cred(0))</title>
       <link>https://algoatson.github.io/p/kernel-lpe-commit-creds/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/kernel-lpe-commit-creds/</guid>
       <pubDate>Sun, 12 Apr 2026 00:00:00 +0000</pubDate>
       <category>kernel</category><category>pwn</category>
       <description>The data-only path overwrites modprobe_path; the code path hijacks kernel control flow to run commit_creds(prepare_kernel_cred(0)) and returns to a root shell. Here&#x27;s that path, and the four mitigations — SMEP, SMAP, KPTI, KASLR — you step over to walk it.</description>
-    </item>
-    <item>
-      <title>anti-debug bingo: five checks and how they fall</title>
-      <link>https://algoatson.github.io/p/anti-debug-bingo/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/anti-debug-bingo/</guid>
-      <pubDate>Thu, 09 Apr 2026 00:00:00 +0000</pubDate>
-      <category>re</category><category>anti-debug</category><category>linux</category>
-      <description>A survey of the anti-debug checks you trip over on Linux RE targets — what each one measures, the one line that gives it away, and the cheapest defeat. Folded one per card so you can skim to the one that&#x27;s biting you right now.</description>
-    </item>
-    <item>
-      <title>fuzzing a parser with AFL++, harness first</title>
-      <link>https://algoatson.github.io/p/afl-harness-a-parser/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/afl-harness-a-parser/</guid>
-      <pubDate>Sat, 28 Mar 2026 00:00:00 +0000</pubDate>
-      <category>fuzzing</category><category>tools</category>
-      <description>A fuzzer is only as good as the harness you point it at. Write a tight persistent-mode target around the parser, build it with instrumentation + ASAN, feed it a real corpus, and let coverage feedback find the inputs you never would. Then triage what falls out.</description>
-    </item>
-    <item>
-      <title>two signatures, one nonce: recovering an ECDSA key</title>
-      <link>https://algoatson.github.io/p/ecdsa-nonce-reuse/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/ecdsa-nonce-reuse/</guid>
-      <pubDate>Sun, 22 Mar 2026 00:00:00 +0000</pubDate>
-      <category>crypto</category><category>ctf</category><category>math</category>
-      <description>The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.</description>
     </item>
   </channel>
 </rss>

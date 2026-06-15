@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the tcache stashing unlink attack — algoatson.github.io</title>
+<meta name="description" content="When a smallbin serves a request, glibc stashes the leftover chunks into the tcache — and that stashing does a doubly-linked-list unlink with a far weaker check than the real thing. Corrupt one bk pointer and you get a libc write and an allocation at an address you choose.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/tcache-stashing-unlink/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the tcache stashing unlink attack — algoatson.github.io">
+<meta property="og:description" content="When a smallbin serves a request, glibc stashes the leftover chunks into the tcache — and that stashing does a doubly-linked-list unlink with a far weaker check than the real thing. Corrupt one bk pointer and you get a libc write and an allocation at an address you choose.">
+<meta property="og:url" content="https://algoatson.github.io/p/tcache-stashing-unlink/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/tcache-stashing-unlink.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the tcache stashing unlink attack", "datePublished": "2026-06-04", "dateModified": "2026-06-04", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "When a smallbin serves a request, glibc stashes the leftover chunks into the tcache — and that stashing does a doubly-linked-list unlink with a far weaker check than the real thing. Corrupt one bk pointer and you get a libc write and an allocation at an address you choose.", "url": "https://algoatson.github.io/p/tcache-stashing-unlink/", "mainEntityOfPage": "https://algoatson.github.io/p/tcache-stashing-unlink/", "keywords": "heap, pwn, glibc"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the tcache stashing unlink attack</h1>
+  <div class="meta"><span>2026-06-04</span><span>3 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-stashing-loop">the stashing loop</a></li>
+<li><a href="#the-two-payoffs-from-one-bk-overwrite">the two payoffs from one bk overwrite</a></li>
+<li><a href="#the-check-and-how-to-satisfy-it">the check, and how to satisfy it</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The <a href="/p/unsafe-unlink/">classic unlink</a> is dead on modern glibc — its checks are
+airtight. But the same doubly-linked-list bookkeeping happens in a quieter corner
+of the allocator, with a much weaker guard: the <strong>smallbin → tcache stashing</strong>
+loop. <a href="/p/tcache-poisoning-explained/">tcache poisoning</a> gives you one arbitrary
+allocation per corrupted <code class="highlight">next</code>; stashing gives you a libc write <em>and</em> an
+allocation, from a single <code class="highlight">bk</code> overwrite.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./stash</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.31</dd></div><div><dt>primitive</dt><dd>overwrite a smallbin chunk&#x27;s bk</dd></div><div><dt>needs</dt><dd>a smallbin with &gt;= 2 chunks (and a heap leak helps)</dd></div></dl></div></figure>
+<h2 id="the-stashing-loop">the stashing loop<a class="headerlink" href="#the-stashing-loop" title="Permanent link">#</a></h2>
+<p>When <code class="highlight">_int_malloc</code> services a request from a smallbin and the tcache for that size
+has room, it doesn't stop at one chunk — it <strong>stashes the rest of the smallbin
+into the tcache</strong>, walking the list from the back. The core of that loop, trimmed:</p>
+<figure class="codeblock"><figcaption><span class="fname">_int_malloc, smallbin stash (paraphrased)</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#-int-malloc-smallbin-stash-paraphrased-1">1</a></span>
+<span class="normal"><a href="#-int-malloc-smallbin-stash-paraphrased-2">2</a></span>
+<span class="normal"><a href="#-int-malloc-smallbin-stash-paraphrased-3">3</a></span>
+<span class="normal"><a href="#-int-malloc-smallbin-stash-paraphrased-4">4</a></span>
+<span class="normal"><a href="#-int-malloc-smallbin-stash-paraphrased-5">5</a></span>
+<span class="normal"><a href="#-int-malloc-smallbin-stash-paraphrased-6">6</a></span>
+<span class="normal"><a href="#-int-malloc-smallbin-stash-paraphrased-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="-int-malloc-smallbin-stash-paraphrased-1"><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">tcache</span><span class="o">-&gt;</span><span class="n">counts</span><span class="p">[</span><span class="n">tc_idx</span><span class="p">]</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">tcache_count</span>
+</span><span id="-int-malloc-smallbin-stash-paraphrased-2"><span class="w">       </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span><span class="n">tc_victim</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">last</span><span class="p">(</span><span class="n">bin</span><span class="p">))</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">bin</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="-int-malloc-smallbin-stash-paraphrased-3"><span class="w">    </span><span class="n">bck</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tc_victim</span><span class="o">-&gt;</span><span class="n">bk</span><span class="p">;</span>
+</span><span id="-int-malloc-smallbin-stash-paraphrased-4"><span class="hll"><span class="w">    </span><span class="n">bin</span><span class="o">-&gt;</span><span class="n">bk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bck</span><span class="p">;</span><span class="w">            </span><span class="cm">/* detach tc_victim from the smallbin ... */</span>
+</span></span><span id="-int-malloc-smallbin-stash-paraphrased-5"><span class="hll"><span class="w">    </span><span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bin</span><span class="p">;</span><span class="w">            </span><span class="cm">/* ... by writing &amp;bin into bck-&gt;fd  &lt;-- the lever */</span>
+</span></span><span id="-int-malloc-smallbin-stash-paraphrased-6"><span class="w">    </span><span class="n">tcache_put</span><span class="p">(</span><span class="n">tc_victim</span><span class="p">,</span><span class="w"> </span><span class="n">tc_idx</span><span class="p">);</span>
+</span><span id="-int-malloc-smallbin-stash-paraphrased-7"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">bck-&gt;fd = bin</code> is an unlink half-step: it writes a libc pointer (<code class="highlight">bin</code>, an address
+inside <code class="highlight">main_arena</code>) into <code class="highlight">bck-&gt;fd</code>, which sits <code class="highlight">0x10</code> bytes into whatever <code class="highlight">bck</code>
+points at. And <code class="highlight">bck</code> came straight from <code class="highlight">tc_victim-&gt;bk</code> — a field you can corrupt.</p>
+<h2 id="the-two-payoffs-from-one-bk-overwrite">the two payoffs from one bk overwrite<a class="headerlink" href="#the-two-payoffs-from-one-bk-overwrite" title="Permanent link">#</a></h2>
+<p>Point a stashed chunk's <code class="highlight">bk</code> at <code class="highlight">target - 0x10</code>. Then <code class="highlight">bck = target - 0x10</code>, and
+<code class="highlight">bck-&gt;fd</code> — at <code class="highlight">target - 0x10 + 0x10 = target</code> — receives <code class="highlight">bin</code>:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">corrupted smallbin chunk: bk -&gt; target-0x10</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  00 00 00 00 00 00 00 00  <mark>91</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark> <mark>00</mark>  <span class="asc">|........<mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark><mark>.</mark>|</span>
+<span class="off">00000010</span>  ef 0e 5a 11 27 f0 00 00  0f 0f f5 d5 55 55 50 00  <span class="asc">|..Z.&#x27;.......UUP.|</span>
+<span class="off">00000020</span>  0f db ae 01                                       <span class="asc">|....            |</span></pre></div></figure>
+<ol>
+<li><strong>A libc pointer written to <code class="highlight">target</code>.</strong> Aim <code class="highlight">target</code> at a <code class="highlight">__free_hook</code>,
+   a writable function pointer, or a GOT-adjacent slot, and the stashing loop drops
+   a known-offset libc address there for free.</li>
+<li><strong>An allocation at a chosen address.</strong> <code class="highlight">tcache_put</code> also puts <code class="highlight">tc_victim</code> into
+   the tcache, so the <em>next</em> <code class="highlight">malloc</code> of that size hands back the chunk you steered
+   — overlapping whatever you targeted.</li>
+</ol>
+<figure class="codeblock"><figcaption><span class="fname">stash.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#stashpy-1">1</a></span>
+<span class="normal"><a href="#stashpy-2">2</a></span>
+<span class="normal"><a href="#stashpy-3">3</a></span>
+<span class="normal"><a href="#stashpy-4">4</a></span>
+<span class="normal"><a href="#stashpy-5">5</a></span>
+<span class="normal"><a href="#stashpy-6">6</a></span>
+<span class="normal"><a href="#stashpy-7">7</a></span>
+<span class="normal"><a href="#stashpy-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="stashpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="stashpy-2"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./stash&quot;</span><span class="p">)</span>
+</span><span id="stashpy-3">
+</span><span id="stashpy-4"><span class="n">fill_smallbin</span><span class="p">(</span><span class="n">count</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>                       <span class="c1"># two chunks in one smallbin</span>
+</span><span id="stashpy-5"><span class="n">corrupt_bk</span><span class="p">(</span><span class="n">chunk2</span><span class="p">,</span> <span class="n">value</span> <span class="o">=</span> <span class="n">target</span> <span class="o">-</span> <span class="mh">0x10</span><span class="p">)</span>    <span class="c1"># the single overwrite</span>
+</span><span id="stashpy-6"><span class="hll"><span class="n">trigger_stash</span><span class="p">(</span><span class="n">size</span><span class="p">)</span>                          <span class="c1"># alloc from the bin -&gt; stash leftovers</span>
+</span></span><span id="stashpy-7"><span class="hll">                                             <span class="c1"># -&gt; *(target) = main_arena+off</span>
+</span></span><span id="stashpy-8"><span class="hll"><span class="n">p</span> <span class="o">=</span> <span class="n">alloc</span><span class="p">(</span><span class="n">size</span><span class="p">)</span>                              <span class="c1"># next alloc lands on the stash victim</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-check-and-how-to-satisfy-it">the check, and how to satisfy it<a class="headerlink" href="#the-check-and-how-to-satisfy-it" title="Permanent link">#</a></h2>
+<p>Newer glibc guards the loop:</p>
+<figure class="codeblock"><figcaption><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">__glibc_unlikely</span><span class="w"> </span><span class="p">(</span><span class="n">bck</span><span class="o">-&gt;</span><span class="n">fd</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">tc_victim</span><span class="p">))</span>
+</span><span id="code-2"><span class="w">    </span><span class="n">malloc_printerr</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;malloc(): unsorted double linked list corrupted&quot;</span><span class="p">);</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>So <code class="highlight">target + 0x10</code> (which is <code class="highlight">bck-&gt;fd</code>) must already equal <code class="highlight">tc_victim</code> when the
+loop runs. In practice you arrange that by pointing <code class="highlight">target</code> at a region you can
+pre-seed (another heap chunk, a controlled global) so its <code class="highlight">+0x10</code> slot holds the
+victim's address. When you can't, the attack is constrained to targets whose
+<code class="highlight">+0x10</code> you already control — which, conveniently, includes a freed chunk's own
+neighbourhood.</p>
+<details class="spoiler">
+<summary>the write the airtight unlink wouldn't give you</summary>
+<p>A libc pointer dropped on <code class="highlight">__free_hook</code>'s neighbourhood plus an overlapping
+allocation — and <code class="highlight">unlink</code>'s modern checks never ran, because this isn't
+<code class="highlight">unlink</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-4-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-4-1">segfault{the_unlink_they_forgot_to_harden}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<p>The lesson the heap keeps teaching: hardening one code path doesn't harden the
+<em>operation</em>. <code class="highlight">unlink</code> got bulletproofed, but the same list surgery lives in the
+stashing loop with a single equality check — and a single equality check is a
+condition you satisfy, not a wall you climb.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/cet-shadow-stack-ibt/"><span class="lbl">&#8249; newer</span>CET — shadow stacks, IBT, and what still works</a><a class="next" href="/p/arm64-pac-and-mte/"><span class="lbl">older &#8250;</span>PAC and MTE — how ARM64&#x27;s new walls fall</a></nav></main>
+
+    <footer class="status">
+      <span>44 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

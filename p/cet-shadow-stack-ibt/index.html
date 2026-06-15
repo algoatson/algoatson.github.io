@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>CET — shadow stacks, IBT, and what still works — algoatson.github.io</title>
+<meta name="description" content="Intel CET puts return addresses on a second, hardware-protected stack and demands every indirect branch land on an endbr64. That ends classic ROP and JOP. It does not end exploitation — whole-function calls, data-only attacks, and the occasional shadow-stack write all walk right past it.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/cet-shadow-stack-ibt/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="CET — shadow stacks, IBT, and what still works — algoatson.github.io">
+<meta property="og:description" content="Intel CET puts return addresses on a second, hardware-protected stack and demands every indirect branch land on an endbr64. That ends classic ROP and JOP. It does not end exploitation — whole-function calls, data-only attacks, and the occasional shadow-stack write all walk right past it.">
+<meta property="og:url" content="https://algoatson.github.io/p/cet-shadow-stack-ibt/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/cet-shadow-stack-ibt.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "CET — shadow stacks, IBT, and what still works", "datePublished": "2026-06-05", "dateModified": "2026-06-05", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Intel CET puts return addresses on a second, hardware-protected stack and demands every indirect branch land on an endbr64. That ends classic ROP and JOP. It does not end exploitation — whole-function calls, data-only attacks, and the occasional shadow-stack write all walk right past it.", "url": "https://algoatson.github.io/p/cet-shadow-stack-ibt/", "mainEntityOfPage": "https://algoatson.github.io/p/cet-shadow-stack-ibt/", "keywords": "pwn, internals"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>CET — shadow stacks, IBT, and what still works</h1>
+  <div class="meta"><span>2026-06-05</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/internals/">internals</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#shadow-stack-return-addresses-you-cant-reach">shadow stack — return addresses you can't reach</a></li>
+<li><a href="#ibt-every-indirect-branch-must-land-on-endbr64">IBT — every indirect branch must land on endbr64</a></li>
+<li><a href="#what-still-works">what still works</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The <a href="/p/the-stack-canary-from-the-source/">stack canary</a> guards one value;
+<a href="/p/arm64-pac-and-mte/">PAC/MTE</a> raised the bar on ARM. x86's answer is <strong>CET</strong>,
+Control-flow Enforcement Technology — two hardware features that, together, delete
+the gadget soup ROP and JOP rely on. Knowing precisely what they delete (and what
+they leave) is the difference between "mitigated" and "exploited."</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>CET</dt><dd>shadow stack (SHSTK) + indirect branch tracking (IBT)</dd></div><div><dt>compiler</dt><dd>-fcf-protection (endbr64 at every indirect target)</dd></div><div><dt>kills</dt><dd>classic ROP and JOP/COP to mid-function gadgets</dd></div></dl></div></figure>
+<h2 id="shadow-stack-return-addresses-you-cant-reach">shadow stack — return addresses you can't reach<a class="headerlink" href="#shadow-stack-return-addresses-you-cant-reach" title="Permanent link">#</a></h2>
+<p>With SHSTK, every <code class="highlight">call</code> pushes the return address to <strong>two</strong> places: the normal
+stack and a separate <strong>shadow stack</strong> in specially-protected memory you can't write
+with an ordinary store. Every <code class="highlight">ret</code> pops both and compares them — mismatch raises a
+control-protection fault (<code class="highlight">#CP</code>):</p>
+<figure class="codeblock"><figcaption><span class="fname">why a stack overflow stops redirecting ret</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#why-a-stack-overflow-stops-redirecting-ret-1">1</a></span>
+<span class="normal"><a href="#why-a-stack-overflow-stops-redirecting-ret-2">2</a></span>
+<span class="normal"><a href="#why-a-stack-overflow-stops-redirecting-ret-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="why-a-stack-overflow-stops-redirecting-ret-1">call f   -&gt;  push retaddr to normal stack  AND  to shadow stack
+</span><span id="why-a-stack-overflow-stops-redirecting-ret-2">overflow -&gt;  attacker rewrites retaddr on the NORMAL stack
+</span><span id="why-a-stack-overflow-stops-redirecting-ret-3">ret      -&gt;  normal[top] != shadow[top]    -&gt;  #CP, process killed
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Overwriting the saved return address simply doesn't steer execution anymore — the
+shadow copy is untouched and authoritative. Classic ROP, which is nothing <em>but</em>
+overwritten return addresses, is dead.</p>
+<h2 id="ibt-every-indirect-branch-must-land-on-endbr64">IBT — every indirect branch must land on endbr64<a class="headerlink" href="#ibt-every-indirect-branch-must-land-on-endbr64" title="Permanent link">#</a></h2>
+<p>The second half covers indirect <code class="highlight">call</code>/<code class="highlight">jmp</code>. Under IBT, an indirect branch may
+only target an instruction that <em>is</em> <code class="highlight">endbr64</code>; land anywhere else and you get
+<code class="highlight">#CP</code>. The compiler drops an <code class="highlight">endbr64</code> at every legal indirect target — function
+entries, basically:</p>
+<figure class="codeblock"><figcaption><span class="fname">a legal indirect target</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#a-legal-indirect-target-1">1</a></span>
+<span class="normal"><a href="#a-legal-indirect-target-2">2</a></span>
+<span class="normal"><a href="#a-legal-indirect-target-3">3</a></span>
+<span class="normal"><a href="#a-legal-indirect-target-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="a-legal-indirect-target-1"><span class="nf">endbr64</span><span class="w">                 </span><span class="c1">; without this first byte, an indirect call here faults</span>
+</span><span id="a-legal-indirect-target-2"><span class="nf">push</span><span class="w"> </span><span class="no">rbp</span>
+</span><span id="a-legal-indirect-target-3"><span class="nf">mov</span><span class="w">  </span><span class="no">rbp</span><span class="p">,</span><span class="w"> </span><span class="no">rsp</span>
+</span><span id="a-legal-indirect-target-4"><span class="c1">; ... function body ...</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>JOP and COP — chaining <code class="highlight">jmp</code>/<code class="highlight">call</code> gadgets in the middle of functions — can no
+longer aim at mid-function gadgets. Every indirect hop has to land on a function
+<em>entry</em>.</p>
+<h2 id="what-still-works">what still works<a class="headerlink" href="#what-still-works" title="Permanent link">#</a></h2>
+<p>CET is a real, large tax. It is not a wall:</p>
+<ul>
+<li><strong>Whole-function calls (COP to entries).</strong> IBT permits indirect calls to any
+  <code class="highlight">endbr64</code>, and every function starts with one. If you control an indirect call
+  site and its arguments, calling <code class="highlight">system</code> — or any useful function — outright is
+  still legal control flow. You lost gadgets, not functions.</li>
+<li><strong>Data-only attacks.</strong> Neither feature looks at <em>data</em>. Overwrite a
+  <a href="/p/slab-uaf-modprobe/"><code class="highlight">modprobe_path</code></a>, a <code class="highlight">__malloc_hook</code>-era pointer that gets
+  <em>called</em> through a legal site, file-stream fields, or a length used in a <code class="highlight">memcpy</code>
+  — no return address forged, no indirect branch broken.</li>
+<li><strong>Loops and back-edges already in the program.</strong> The intended control flow does
+  plenty; bend the <em>data</em> it flows over.</li>
+<li><strong>Shadow stack writes, where they exist.</strong> If <code class="highlight">wrss</code> is enabled, or a bug gives a
+  write to shadow-stack memory, or <code class="highlight">incssp</code> gadgets let you skip entries, the
+  return-address guarantee weakens. And if SHSTK isn't enabled for the thread at
+  all, you're back to ordinary ROP.</li>
+</ul>
+<details class="spoiler">
+<summary>the shape of a CET-era exploit</summary>
+<p>Stop forging return addresses; find an indirect <em>call</em> you control and aim it at
+a real function entry, or skip control flow entirely and corrupt the data it
+trusts:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{endbr64_is_at_the_start_of_system_too}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<p>CET ends the era of stitching mid-function gadgets into return-oriented chains —
+genuinely, that technique is over where it's deployed. What replaces it is older
+than ROP: call the functions that already exist with the arguments you want, or
+don't touch control flow at all and let corrupted data carry the exploit. The bug
+still decides; CET just narrows the menu.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-02</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/arm64-pac-and-mte/">PAC and MTE — how ARM64&#x27;s new walls fall</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-10</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/glibc-heap-internals/"><span class="lbl">&#8249; newer</span>the glibc heap, from the chunk up</a><a class="next" href="/p/tcache-stashing-unlink/"><span class="lbl">older &#8250;</span>the tcache stashing unlink attack</a></nav></main>
+
+    <footer class="status">
+      <span>44 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

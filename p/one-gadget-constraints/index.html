@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>one_gadget — a shell in a single address — algoatson.github.io</title>
+<meta name="description" content="Somewhere in libc is an address that calls execve(&quot;/bin/sh&quot;, NULL, NULL) for you — if the registers and stack happen to be in the right shape when you land on it. one_gadget finds them; the constraints decide whether you can use one, and how to bend your context to fit.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/one-gadget-constraints/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="one_gadget — a shell in a single address — algoatson.github.io">
+<meta property="og:description" content="Somewhere in libc is an address that calls execve(&quot;/bin/sh&quot;, NULL, NULL) for you — if the registers and stack happen to be in the right shape when you land on it. one_gadget finds them; the constraints decide whether you can use one, and how to bend your context to fit.">
+<meta property="og:url" content="https://algoatson.github.io/p/one-gadget-constraints/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/one-gadget-constraints.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "one_gadget — a shell in a single address", "datePublished": "2026-01-22", "dateModified": "2026-01-22", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Somewhere in libc is an address that calls execve(\"/bin/sh\", NULL, NULL) for you — if the registers and stack happen to be in the right shape when you land on it. one_gadget finds them; the constraints decide whether you can use one, and how to bend your context to fit.", "url": "https://algoatson.github.io/p/one-gadget-constraints/", "mainEntityOfPage": "https://algoatson.github.io/p/one-gadget-constraints/", "keywords": "pwn"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>one_gadget — a shell in a single address</h1>
+  <div class="meta"><span>2026-01-22</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#what-one_gadget-finds">what one_gadget finds</a></li>
+<li><a href="#picking-the-one-that-fits-your-context">picking the one that fits your context</a></li>
+<li><a href="#when-none-of-them-match">when none of them match</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>You have an arbitrary jump — a hook to overwrite, a saved return address, a
+function pointer — but not enough room or leaks for a clean
+<a href="/p/ret2libc-warmup/"><code class="highlight">system(&quot;/bin/sh&quot;)</code></a> call. A <em>one-gadget</em> is the shortcut: a
+single libc address that, when executed, spawns a shell. No argument setup, no
+chain. The catch is that each one only fires if the surrounding register/stack
+state already satisfies its constraints.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./svc + libc.so.6</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>have</dt><dd>one arbitrary jump (a hook / saved RIP) + a libc leak</dd></div><div><dt>want</dt><dd>a shell without building a full ROP chain</dd></div></dl></div></figure>
+<h2 id="what-one_gadget-finds">what one_gadget finds<a class="headerlink" href="#what-one_gadget-finds" title="Permanent link">#</a></h2>
+<p>These addresses live inside libc's <code class="highlight">do_system</code>/<code class="highlight">exec_comm</code> path, where <code class="highlight">/bin/sh</code>
+is already staged — but reaching <code class="highlight">execve</code> cleanly needs the argument registers to
+be <code class="highlight">NULL</code>. <code class="highlight">one_gadget</code> enumerates them and prints the <strong>constraints</strong> that must
+hold at the jump:</p>
+<figure class="codeblock"><figcaption><span class="fname">one_gadget ./libc.so.6</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#one-gadget-libcso6-1"> 1</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-2"> 2</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-3"> 3</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-4"> 4</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-5"> 5</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-6"> 6</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-7"> 7</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-8"> 8</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-9"> 9</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-10">10</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-11">11</a></span>
+<span class="normal"><a href="#one-gadget-libcso6-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="one-gadget-libcso6-1">0x4f2a5 execve(&quot;/bin/sh&quot;, rsp+0x40, environ)
+</span><span id="one-gadget-libcso6-2">constraints:
+</span><span id="one-gadget-libcso6-3">  rsp &amp; 0xf == 0
+</span><span id="one-gadget-libcso6-4">  rcx == NULL
+</span><span id="one-gadget-libcso6-5">
+</span><span id="one-gadget-libcso6-6">0x4f302 execve(&quot;/bin/sh&quot;, rsp+0x40, environ)
+</span><span id="one-gadget-libcso6-7">constraints:
+</span><span id="one-gadget-libcso6-8">  [rsp+0x40] == NULL
+</span><span id="one-gadget-libcso6-9">
+</span><span id="one-gadget-libcso6-10">0x10a2fc execve(&quot;/bin/sh&quot;, rsp+0x70, environ)
+</span><span id="one-gadget-libcso6-11">constraints:
+</span><span id="one-gadget-libcso6-12">  [rsp+0x70] == NULL
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The address is the easy part — <code class="highlight">libc_base + 0x4f302</code>. The constraint is the whole
+game: at the instant control reaches it, the listed register or stack slot has to
+already be zero.</p>
+<h2 id="picking-the-one-that-fits-your-context">picking the one that fits your context<a class="headerlink" href="#picking-the-one-that-fits-your-context" title="Permanent link">#</a></h2>
+<p>You don't get to choose your register state — the call site that hands you control
+does. The trick is knowing what's <code class="highlight">NULL</code> <em>there</em>:</p>
+<ul>
+<li><strong>right after <code class="highlight">free(p)</code></strong> — on many glibc builds <code class="highlight">rax</code>/some args are predictable;
+  the <code class="highlight">[rsp+0x40] == NULL</code> variants often hold;</li>
+<li><strong>overwriting <code class="highlight">__free_hook</code></strong> (pre-2.34) — <code class="highlight">free(p)</code> calls <code class="highlight">hook(p)</code>, so <code class="highlight">rdi=p</code>;
+  a gadget that doesn't care about <code class="highlight">rdi</code> and only needs a NULL stack slot is ideal;</li>
+<li><strong>a saved return address</strong> — you control the stack around <code class="highlight">rsp</code>, so a
+  <code class="highlight">[rsp+0x40] == NULL</code> constraint is something you can <em>arrange</em> by placing a zero
+  there.</li>
+</ul>
+<figure class="codeblock"><figcaption><span class="fname">og.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#ogpy-1">1</a></span>
+<span class="normal"><a href="#ogpy-2">2</a></span>
+<span class="normal"><a href="#ogpy-3">3</a></span>
+<span class="normal"><a href="#ogpy-4">4</a></span>
+<span class="normal"><a href="#ogpy-5">5</a></span>
+<span class="normal"><a href="#ogpy-6">6</a></span>
+<span class="normal"><a href="#ogpy-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="ogpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="ogpy-2"><span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">)</span>
+</span><span id="ogpy-3"><span class="n">base</span> <span class="o">=</span> <span class="n">leak_libc</span><span class="p">()</span>                       <span class="c1"># one_gadget addresses are libc-relative</span>
+</span><span id="ogpy-4">
+</span><span id="ogpy-5"><span class="hll"><span class="n">og</span> <span class="o">=</span> <span class="n">base</span> <span class="o">+</span> <span class="mh">0x4f302</span>                      <span class="c1"># the [rsp+0x40] == NULL variant</span>
+</span></span><span id="ogpy-6"><span class="hll"><span class="c1"># we control the stack here, so make sure rsp+0x40 holds a 0 when we land:</span>
+</span></span><span id="ogpy-7"><span class="hll"><span class="n">overwrite_saved_rip</span><span class="p">(</span><span class="n">og</span><span class="p">,</span> <span class="n">and_zero_at</span><span class="o">=</span><span class="s2">&quot;rsp+0x40&quot;</span><span class="p">)</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>when one fires, it's a shell in one write</summary>
+<p>No args, no chain — the gadget did <code class="highlight">execve(&quot;/bin/sh&quot;, …)</code> because the one slot
+it cared about was zero:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{one_address_one_shell}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="when-none-of-them-match">when none of them match<a class="headerlink" href="#when-none-of-them-match" title="Permanent link">#</a></h2>
+<p>It happens — every gadget needs a slot you can't zero. Options, roughly in order:</p>
+<ul>
+<li><strong>Arrange the constraint.</strong> Pivot the stack so the required <code class="highlight">[rsp+X]</code> lands on
+  memory you control, then write <code class="highlight">NULL</code> there. Most "impossible" one_gadgets become
+  possible after a small pivot.</li>
+<li><strong>Pick a different jump site.</strong> The same one_gadget that fails from <code class="highlight">__free_hook</code>
+  may satisfy its constraint from a saved return address, where you own the stack.</li>
+<li><strong>Fall back to the long way.</strong> No matching gadget → set up <code class="highlight">rdi = &quot;/bin/sh&quot;</code> and
+  call <code class="highlight">system</code> with a real (if longer) chain. one_gadget is a convenience, not a
+  dependency.</li>
+</ul>
+<p>The mental model: <code class="highlight">system(&quot;/bin/sh&quot;)</code> is the reliable workhorse; a one_gadget is
+the same destination reached in a single write, <em>if</em> the calling context already
+did the argument setup for you. Read the constraints first — they tell you
+instantly whether this shortcut is open from where you're standing.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/ret2libc-warmup/"><span class="lbl">&#8249; newer</span>ret2libc on a warm-up: stack smash to shell</a><a class="next" href="/p/tcache-poisoning-explained/"><span class="lbl">older &#8250;</span>tcache poisoning, explained like you&#x27;ll have to use it</a></nav></main>
+
+    <footer class="status">
+      <span>44 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

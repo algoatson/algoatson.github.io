@@ -19,6 +19,8 @@
   <url><loc>https://algoatson.github.io/p/the-rendering-reference/</loc><lastmod>2026-06-12</lastmod></url>
   <url><loc>https://algoatson.github.io/p/house-of-force/</loc><lastmod>2026-06-09</lastmod></url>
   <url><loc>https://algoatson.github.io/p/glibc-heap-internals/</loc><lastmod>2026-06-08</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/cet-shadow-stack-ibt/</loc><lastmod>2026-06-05</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/tcache-stashing-unlink/</loc><lastmod>2026-06-04</lastmod></url>
   <url><loc>https://algoatson.github.io/p/arm64-pac-and-mte/</loc><lastmod>2026-06-02</lastmod></url>
   <url><loc>https://algoatson.github.io/p/rizin-radare2-in-anger/</loc><lastmod>2026-06-02</lastmod></url>
   <url><loc>https://algoatson.github.io/p/stack-pivoting/</loc><lastmod>2026-05-30</lastmod></url>
@@ -30,6 +32,7 @@
   <url><loc>https://algoatson.github.io/p/pwndbg-muscle-memory/</loc><lastmod>2026-05-01</lastmod></url>
   <url><loc>https://algoatson.github.io/p/seccomp-jails-and-their-holes/</loc><lastmod>2026-04-30</lastmod></url>
   <url><loc>https://algoatson.github.io/p/first-five-minutes-unknown-binary/</loc><lastmod>2026-04-22</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/userfaultfd-fuse-race-windows/</loc><lastmod>2026-04-20</lastmod></url>
   <url><loc>https://algoatson.github.io/p/kernel-lpe-commit-creds/</loc><lastmod>2026-04-12</lastmod></url>
   <url><loc>https://algoatson.github.io/p/anti-debug-bingo/</loc><lastmod>2026-04-09</lastmod></url>
   <url><loc>https://algoatson.github.io/p/afl-harness-a-parser/</loc><lastmod>2026-03-28</lastmod></url>
@@ -41,6 +44,7 @@
   <url><loc>https://algoatson.github.io/p/devirtualizing-a-toy-vm/</loc><lastmod>2026-02-09</lastmod></url>
   <url><loc>https://algoatson.github.io/p/angr-symbolic-crackme/</loc><lastmod>2026-02-08</lastmod></url>
   <url><loc>https://algoatson.github.io/p/ret2libc-warmup/</loc><lastmod>2026-01-29</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/one-gadget-constraints/</loc><lastmod>2026-01-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/tcache-poisoning-explained/</loc><lastmod>2026-01-18</lastmod></url>
   <url><loc>https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/</loc><lastmod>2026-01-05</lastmod></url>
   <url><loc>https://algoatson.github.io/p/advent-of-pwn/</loc><lastmod>2026-06-13</lastmod></url>

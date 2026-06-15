@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>userfaultfd &amp; FUSE — freezing a race until it&#x27;s deterministic — algoatson.github.io</title>
+<meta name="description" content="A UAF that needs you to reallocate in a microsecond window is a coin flip — unless you can pause the kernel mid-copy. userfaultfd (and FUSE, when it&#x27;s locked down) let a page fault block in your own handler, stretching a hopeless race into a step you control.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/userfaultfd-fuse-race-windows/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="userfaultfd &amp; FUSE — freezing a race until it&#x27;s deterministic — algoatson.github.io">
+<meta property="og:description" content="A UAF that needs you to reallocate in a microsecond window is a coin flip — unless you can pause the kernel mid-copy. userfaultfd (and FUSE, when it&#x27;s locked down) let a page fault block in your own handler, stretching a hopeless race into a step you control.">
+<meta property="og:url" content="https://algoatson.github.io/p/userfaultfd-fuse-race-windows/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/userfaultfd-fuse-race-windows.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "userfaultfd & FUSE — freezing a race until it's deterministic", "datePublished": "2026-04-20", "dateModified": "2026-04-20", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A UAF that needs you to reallocate in a microsecond window is a coin flip — unless you can pause the kernel mid-copy. userfaultfd (and FUSE, when it's locked down) let a page fault block in your own handler, stretching a hopeless race into a step you control.", "url": "https://algoatson.github.io/p/userfaultfd-fuse-race-windows/", "mainEntityOfPage": "https://algoatson.github.io/p/userfaultfd-fuse-race-windows/", "keywords": "kernel, pwn"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>userfaultfd &amp; FUSE — freezing a race until it&#x27;s deterministic</h1>
+  <div class="meta"><span>2026-04-20</span><span>3 min read</span><a class="tag" href="/tags/kernel/">kernel</a> <a class="tag" href="/tags/pwn/">pwn</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#userfaultfd-handle-your-own-page-faults">userfaultfd: handle your own page faults</a></li>
+<li><a href="#when-userfaultfd-is-locked-down-fuse">when userfaultfd is locked down: FUSE</a></li>
+<li><a href="#the-defensive-view">the defensive view</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Plenty of kernel bugs are "exploitable in theory": a use-after-free where you must
+reclaim the freed object with controlled data before the kernel touches it again,
+or a double-fetch where a value must change between two reads. The window is
+microseconds — racing it blind is a coin flip. The trick is to stop flipping
+coins and <strong>pause the kernel</strong> at exactly the wrong moment for it and the right one
+for you.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./vuln.ko</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>bug</dt><dd>UAF — narrow race between free and reuse</dd></div><div><dt>goal</dt><dd>turn the race into a deterministic, single-shot reclaim</dd></div></dl></div></figure>
+<h2 id="userfaultfd-handle-your-own-page-faults">userfaultfd: handle your own page faults<a class="headerlink" href="#userfaultfd-handle-your-own-page-faults" title="Permanent link">#</a></h2>
+<p><code class="highlight">userfaultfd(2)</code> lets a process register a memory range and <strong>handle the page
+faults for it in userland</strong>. When anything — including the kernel doing
+<code class="highlight">copy_from_user</code> on your behalf — touches an unpopulated page in that range, the
+faulting context <em>blocks</em> until your handler resolves it. That blocked context is
+your lever:</p>
+<figure class="codeblock"><figcaption><span class="fname">the frozen-mid-copy trick</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-frozen-mid-copy-trick-1">1</a></span>
+<span class="normal"><a href="#the-frozen-mid-copy-trick-2">2</a></span>
+<span class="normal"><a href="#the-frozen-mid-copy-trick-3">3</a></span>
+<span class="normal"><a href="#the-frozen-mid-copy-trick-4">4</a></span>
+<span class="normal"><a href="#the-frozen-mid-copy-trick-5">5</a></span>
+<span class="normal"><a href="#the-frozen-mid-copy-trick-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-frozen-mid-copy-trick-1">1. mmap a buffer; register its 2nd page with userfaultfd, leave it unpopulated.
+</span><span id="the-frozen-mid-copy-trick-2">2. hand the kernel a struct that straddles the page boundary.
+</span><span id="the-frozen-mid-copy-trick-3">3. kernel copy_from_user: copies page 1, then FAULTS on page 2  -&gt;  BLOCKS.
+</span><span id="the-frozen-mid-copy-trick-4">   |  the syscall is now frozen, half-done, for as long as you like.
+</span><span id="the-frozen-mid-copy-trick-5">4. meanwhile, in another thread: free() the object, groom the heap, reclaim it.
+</span><span id="the-frozen-mid-copy-trick-6">5. resolve the fault (UFFDIO_COPY) -&gt; the copy finishes into the new state.
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The kernel is stuck inside the vulnerable operation while you rearrange the world
+beneath it. A 2-microsecond race becomes a deliberate sequence:</p>
+<figure class="codeblock"><figcaption><span class="fname">uffd handler (sketch)</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#uffd-handler-sketch-1">1</a></span>
+<span class="normal"><a href="#uffd-handler-sketch-2">2</a></span>
+<span class="normal"><a href="#uffd-handler-sketch-3">3</a></span>
+<span class="normal"><a href="#uffd-handler-sketch-4">4</a></span>
+<span class="normal"><a href="#uffd-handler-sketch-5">5</a></span>
+<span class="normal"><a href="#uffd-handler-sketch-6">6</a></span>
+<span class="normal"><a href="#uffd-handler-sketch-7">7</a></span>
+<span class="normal"><a href="#uffd-handler-sketch-8">8</a></span>
+<span class="normal"><a href="#uffd-handler-sketch-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="uffd-handler-sketch-1"><span class="kt">long</span><span class="w"> </span><span class="n">uffd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">syscall</span><span class="p">(</span><span class="n">SYS_userfaultfd</span><span class="p">,</span><span class="w"> </span><span class="n">O_CLOEXEC</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">O_NONBLOCK</span><span class="p">);</span>
+</span><span id="uffd-handler-sketch-2"><span class="c1">// ... UFFDIO_API + UFFDIO_REGISTER the page ...</span>
+</span><span id="uffd-handler-sketch-3"><span class="hll"><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="nf">fault_handler</span><span class="p">(</span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span></span><span id="uffd-handler-sketch-4"><span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">uffd_msg</span><span class="w"> </span><span class="n">msg</span><span class="p">;</span><span class="w"> </span><span class="n">read</span><span class="p">(</span><span class="n">uffd</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">msg</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="w"> </span><span class="n">msg</span><span class="p">);</span><span class="w">   </span><span class="c1">// blocks until the fault</span>
+</span><span id="uffd-handler-sketch-5"><span class="w">    </span><span class="c1">// *** kernel is frozen here, mid copy_from_user ***</span>
+</span><span id="uffd-handler-sketch-6"><span class="w">    </span><span class="n">do_free_and_reclaim</span><span class="p">();</span><span class="w">                                </span><span class="c1">// win the race at leisure</span>
+</span><span id="uffd-handler-sketch-7"><span class="w">    </span><span class="n">ioctl</span><span class="p">(</span><span class="n">uffd</span><span class="p">,</span><span class="w"> </span><span class="n">UFFDIO_COPY</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">copy</span><span class="p">);</span><span class="w">                      </span><span class="c1">// let the kernel continue</span>
+</span><span id="uffd-handler-sketch-8"><span class="hll"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">NULL</span><span class="p">;</span>
+</span></span><span id="uffd-handler-sketch-9"><span class="hll"><span class="p">}</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="when-userfaultfd-is-locked-down-fuse">when userfaultfd is locked down: FUSE<a class="headerlink" href="#when-userfaultfd-is-locked-down-fuse" title="Permanent link">#</a></h2>
+<p>Defenders noticed. <code class="highlight">vm.unprivileged_userfaultfd=0</code> (default on many distros since
+~5.2) restricts uffd, and seccomp sandboxes routinely block the syscall outright.
+The fallback gives the same primitive through the filesystem:</p>
+<ul>
+<li>back a file with a <strong>FUSE</strong> (filesystem-in-userspace) mount;</li>
+<li><code class="highlight">mmap</code> that file and pass the mapping to the kernel;</li>
+<li>when the kernel reads an un-cached page, it calls into <em>your</em> FUSE <code class="highlight">read</code>
+  handler — which blocks exactly like the uffd handler, same controllable window.</li>
+</ul>
+<p>FUSE needs no special privilege beyond a user mount, so it survives where uffd
+doesn't. Same idea, different doorway.</p>
+<details class="spoiler">
+<summary>a coin flip becomes a single deterministic shot</summary>
+<p>With the copy frozen, the reclaim isn't a race at all — it's a step:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] fault caught, kernel parked mid-copy
+</span><span id="code-2">[*] freed victim, sprayed replacement objects
+</span><span id="code-3">[*] resumed copy -&gt; wrote into our controlled object
+</span><span id="code-4">segfault{the_kernel_waited_for_me}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="the-defensive-view">the defensive view<a class="headerlink" href="#the-defensive-view" title="Permanent link">#</a></h2>
+<ul>
+<li><code class="highlight">vm.unprivileged_userfaultfd=0</code> and seccomp-blocking <code class="highlight">userfaultfd</code> close the
+  easy door; FUSE and <code class="highlight">madvise(MADV_DONTNEED)</code> tricks keep a narrower one open.</li>
+<li>The deeper fix is the bug class: don't <code class="highlight">copy_from_user</code> into a structure whose
+  lifetime another thread can change mid-copy, and don't double-fetch user memory.
+  The race primitive only matters because the window exists at all.</li>
+</ul>
+<p>These aren't bugs themselves — they're <strong>race amplifiers</strong>. A flaky one-in-a-
+thousand reclaim becomes a 100% deterministic exploit because you stopped letting
+the kernel run at full speed and made one of its faults wait for your permission.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-04-12</span><a class="row__tag" href="/tags/kernel/">kernel</a><a class="row__title" href="/p/kernel-lpe-commit-creds/">kernel LPE — commit_creds(prepare_kernel_cred(0))</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-02-14</span><a class="row__tag" href="/tags/kernel/">kernel</a><a class="row__title" href="/p/slab-uaf-modprobe/">a slab use-after-free, from ioctl to root</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/first-five-minutes-unknown-binary/"><span class="lbl">&#8249; newer</span>the first five minutes with an unknown binary</a><a class="next" href="/p/kernel-lpe-commit-creds/"><span class="lbl">older &#8250;</span>kernel LPE — commit_creds(prepare_kernel_cred(0))</a></nav></main>
+
+    <footer class="status">
+      <span>44 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
