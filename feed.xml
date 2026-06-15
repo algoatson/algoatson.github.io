@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
     <description>A December advent calendar of pwn and reversing challenges — one door a day, full solves folded behind spoilers. Day 1 byte-diffs Santa&#x27;s naughty-or-nice list; day 2 coaxes a holiday daemon into dumping coal.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 02:52:08 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 03:04:15 +0000</lastBuildDate>
     <item>
       <title>the House of Spirit</title>
       <link>https://algoatson.github.io/p/house-of-spirit/</link>

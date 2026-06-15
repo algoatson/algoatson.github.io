@@ -169,12 +169,32 @@
   bootLightbox();
 
   /* ===================  FUZZY SEARCH (fzf-style)  ========================== */
-  const DATA = (window.SEARCH || []).map(it => ({
+  // the index ships ~100KB+ of post bodies, so load it lazily on first palette
+  // open rather than on every page. (preview.html inlines window.SEARCH, so DATA
+  // is already populated there and no fetch happens.)
+  const buildData = () => (window.SEARCH || []).map(it => ({
     ...it,
     _t: it.title.toLowerCase(),
     _g: (it.tags || []).join(' ').toLowerCase(),
     _x: (it.text || '').toLowerCase()
   }));
+  let DATA = buildData();
+  let idxPromise = null;
+  function loadIndex() {
+    if (DATA.length) return Promise.resolve();
+    if (idxPromise) return idxPromise;
+    // derive the assets dir from the stylesheet href so base_path is respected
+    const ss = document.querySelector('link[rel="stylesheet"]');
+    const base = ss ? ss.href.replace(/[^/]*$/, '') : '/assets/';
+    idxPromise = new Promise(resolve => {
+      const s = document.createElement('script');
+      s.src = base + 'search-index.js';
+      s.onload = () => { DATA = buildData(); resolve(); };
+      s.onerror = () => resolve();           // fail soft: empty results, no crash
+      document.head.appendChild(s);
+    });
+    return idxPromise;
+  }
 
   // subsequence fuzzy match -> {score, positions} or null. fzf-ish heuristics.
   function fuzzy(needle, hay) {
@@ -268,7 +288,9 @@
     const open = () => {
       lastFocus = document.activeElement;
       mask.classList.add('open'); document.body.style.overflow = 'hidden';
-      input.value = ''; render(''); input.focus();
+      input.value = ''; input.focus();
+      loadIndex().then(() => { if (isOpen()) render(input.value); });
+      render('');
     };
     const close = () => {
       const wasOpen = mask.classList.contains('open');
@@ -278,6 +300,11 @@
     const isOpen = () => mask.classList.contains('open');
 
     function render(q) {
+      if (!DATA.length && idxPromise) {        // index still loading
+        results.innerHTML = '<div class="palette__empty">loading index…</div>';
+        counter.textContent = '…';
+        return;
+      }
       items = search(q);
       counter.textContent = `${items.length}/${DATA.length}`;
       if (!items.length) {

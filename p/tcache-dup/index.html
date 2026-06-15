@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
 <script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
 <title>tcache dup — algoatson.github.io</title>
 <meta name="description" content="Part 10 — the fastbin dup&#x27;s lazier cousin. The tcache had no double-free check at all for two glibc releases, and the one it finally got is a single field you can overwrite. Free a chunk twice, get it twice, poison.">
@@ -145,7 +147,6 @@ chunk backward into a fake chunk <em>anywhere</em>.</p></article>
 <div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
   <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
 </div>
-<script src="/assets/search-index.js"></script>
 <script src="/assets/app.js" defer></script>
 </body>
 </html>
