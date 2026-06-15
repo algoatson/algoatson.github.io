@@ -487,10 +487,12 @@ aside.toc .toc { border: 0; padding: 0; background: transparent; }  /* inner md 
 .series__list { margin: 0; padding-left: 0; color: var(--dim); list-style: none;
   counter-reset: sx; }
 .series--long .series__list { column-count: 2; column-gap: 2.4em; }   /* long series: 2 columns */
+/* flex row: the number is a fixed-width gutter and the title wraps in its own
+   column, so a wrapped title hangs under the title — not under the number. */
 .series__list li { counter-increment: sx; margin: 3px 0; padding-left: 7px;
-  break-inside: avoid; }
-.series__list li::before { content: counter(sx) "."; display: inline-block;
-  width: 1.9em; margin-right: .6em; text-align: right; color: var(--faint); }
+  break-inside: avoid; display: flex; align-items: baseline; }
+.series__list li::before { content: counter(sx) "."; flex: 0 0 1.9em;
+  margin-right: .6em; text-align: right; color: var(--faint); }
 .series__list li.cur { color: var(--ink); font-weight: 600;
   box-shadow: inset 2px 0 0 var(--accent); }   /* "you are here" accent bar */
 .series__list li.cur::before { color: var(--accent); }
