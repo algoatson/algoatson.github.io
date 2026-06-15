@@ -4,9 +4,9 @@
     <title>algoatson.github.io</title>
     <link>https://algoatson.github.io/</link>
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>A toy char driver frees an object and keeps the pointer. From there it&#x27;s the usual kernel kata — reclaim the slot with a spray, leak KASLR through the dangling read, then turn the dangling write into a modprobe_path overwrite.</description>
+    <description>The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 14:16:49 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 14:25:34 +0000</lastBuildDate>
     <item>
       <title>House of Apple 2 — FSOP after the hooks died</title>
       <link>https://algoatson.github.io/p/house-of-apple-2/</link>
@@ -128,12 +128,28 @@
       <description>Part 1 of the heap series — the only internals that matter for exploitation: chunk anatomy, the size field&#x27;s flag bits, and the six places a free chunk can live (tcache, fastbins, unsorted, small, large, top). Everything later is corrupting one of these on purpose.</description>
     </item>
     <item>
+      <title>PAC and MTE — how ARM64&#x27;s new walls fall</title>
+      <link>https://algoatson.github.io/p/arm64-pac-and-mte/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/arm64-pac-and-mte/</guid>
+      <pubDate>Tue, 02 Jun 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>internals</category><category>arm</category>
+      <description>ARMv8.3 signs pointers with a cryptographic MAC in their spare bits; ARMv8.5 tags every allocation with a 4-bit lock the pointer must match. Both are real upgrades over the stack canary — and both are beaten by the same old moves: a leak, a signing gadget, or a brute force the field is too small to resist.</description>
+    </item>
+    <item>
       <title>rizin and radare2 in anger</title>
       <link>https://algoatson.github.io/p/rizin-radare2-in-anger/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/rizin-radare2-in-anger/</guid>
       <pubDate>Tue, 02 Jun 2026 00:00:00 +0000</pubDate>
       <category>re</category><category>tooling</category>
       <description>The terminal reverse-engineering workflow — open, analyse, navigate, search, patch, and debug a binary without ever leaving the prompt. The commands I actually use, plus where rizin and radare2 diverge.</description>
+    </item>
+    <item>
+      <title>stack pivoting — when the overflow is too small</title>
+      <link>https://algoatson.github.io/p/stack-pivoting/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/stack-pivoting/</guid>
+      <pubDate>Sat, 30 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category>
+      <description>You control the return address but only have room for two or three gadgets after it. Pivot the stack: point rsp at a buffer you fully control and run the real chain from there. leave;ret, pop rsp, xchg — the move that turns a cramped overflow into unlimited ROP.</description>
     </item>
     <item>
       <title>a pwntools cookbook</title>
@@ -200,6 +216,14 @@
       <description>A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.</description>
     </item>
     <item>
+      <title>kernel LPE — commit_creds(prepare_kernel_cred(0))</title>
+      <link>https://algoatson.github.io/p/kernel-lpe-commit-creds/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/kernel-lpe-commit-creds/</guid>
+      <pubDate>Sun, 12 Apr 2026 00:00:00 +0000</pubDate>
+      <category>kernel</category><category>pwn</category>
+      <description>The data-only path overwrites modprobe_path; the code path hijacks kernel control flow to run commit_creds(prepare_kernel_cred(0)) and returns to a root shell. Here&#x27;s that path, and the four mitigations — SMEP, SMAP, KPTI, KASLR — you step over to walk it.</description>
+    </item>
+    <item>
       <title>anti-debug bingo: five checks and how they fall</title>
       <link>https://algoatson.github.io/p/anti-debug-bingo/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/anti-debug-bingo/</guid>
@@ -222,30 +246,6 @@
       <pubDate>Sun, 22 Mar 2026 00:00:00 +0000</pubDate>
       <category>crypto</category><category>ctf</category><category>math</category>
       <description>The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.</description>
-    </item>
-    <item>
-      <title>the stack canary, from the source</title>
-      <link>https://algoatson.github.io/p/the-stack-canary-from-the-source/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/the-stack-canary-from-the-source/</guid>
-      <pubDate>Sun, 15 Mar 2026 00:00:00 +0000</pubDate>
-      <category>pwn</category><category>glibc</category><category>internals</category>
-      <description>Follow one random value from the kernel&#x27;s AT_RANDOM, through glibc startup, into fs:0x28, and out to every function prologue. Reading the source explains the canary&#x27;s quirks — the null low byte, the per-process (not per-call) value — and each quirk is a bypass.</description>
-    </item>
-    <item>
-      <title>printf is a write primitive</title>
-      <link>https://algoatson.github.io/p/printf-is-a-write-primitive/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/printf-is-a-write-primitive/</guid>
-      <pubDate>Sun, 22 Feb 2026 00:00:00 +0000</pubDate>
-      <category>pwn</category><category>fmtstr</category><category>ctf</category>
-      <description>A single missing &quot;%s&quot; turns printf into a read-anywhere and write-anywhere primitive. Walk the whole ladder — leak the stack with %p, find your own offset, then bend %n into an arbitrary write — and the mitigations that make it harder but rarely impossible.</description>
-    </item>
-    <item>
-      <title>a slab use-after-free, from ioctl to root</title>
-      <link>https://algoatson.github.io/p/slab-uaf-modprobe/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/slab-uaf-modprobe/</guid>
-      <pubDate>Sat, 14 Feb 2026 00:00:00 +0000</pubDate>
-      <category>kernel</category><category>pwn</category><category>linux</category>
-      <description>A toy char driver frees an object and keeps the pointer. From there it&#x27;s the usual kernel kata — reclaim the slot with a spray, leak KASLR through the dangling read, then turn the dangling write into a modprobe_path overwrite.</description>
     </item>
   </channel>
 </rss>

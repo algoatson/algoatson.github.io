@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>defeating obfuscation — MBA, opaque predicates, flattening — algoatson.github.io</title>
+<meta name="description" content="Obfuscators bury a few simple operations under mixed boolean-arithmetic, branches that only look conditional, and a dispatcher loop that scrambles the control flow. Each trick has a matching solvent — algebraic identities, an SMT solver, and symbolic execution of the dispatcher.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/defeating-obfuscation-mba/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="defeating obfuscation — MBA, opaque predicates, flattening — algoatson.github.io">
+<meta property="og:description" content="Obfuscators bury a few simple operations under mixed boolean-arithmetic, branches that only look conditional, and a dispatcher loop that scrambles the control flow. Each trick has a matching solvent — algebraic identities, an SMT solver, and symbolic execution of the dispatcher.">
+<meta property="og:url" content="https://algoatson.github.io/p/defeating-obfuscation-mba/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/defeating-obfuscation-mba.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "defeating obfuscation — MBA, opaque predicates, flattening", "datePublished": "2026-02-14", "dateModified": "2026-02-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Obfuscators bury a few simple operations under mixed boolean-arithmetic, branches that only look conditional, and a dispatcher loop that scrambles the control flow. Each trick has a matching solvent — algebraic identities, an SMT solver, and symbolic execution of the dispatcher.", "url": "https://algoatson.github.io/p/defeating-obfuscation-mba/", "mainEntityOfPage": "https://algoatson.github.io/p/defeating-obfuscation-mba/", "keywords": "re, obfuscation"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>defeating obfuscation — MBA, opaque predicates, flattening</h1>
+  <div class="meta"><span>2026-02-14</span><span>3 min read</span><a class="tag" href="/tags/re/">re</a> <a class="tag" href="/tags/obfuscation/">obfuscation</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#mba-arithmetic-that-hides-arithmetic">MBA — arithmetic that hides arithmetic</a></li>
+<li><a href="#opaque-predicates-branches-that-arent">opaque predicates — branches that aren't</a></li>
+<li><a href="#control-flow-flattening-the-dispatcher">control-flow flattening — the dispatcher</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Open a protected binary and the disassembly is a wall: arithmetic that does
+nothing, branches that never branch, and a giant <code class="highlight">while/switch</code> where the real
+logic used to be. None of it is unbreakable — each obfuscation is a transform with
+a known inverse. The work is recognising which one you're looking at and reaching
+for the right solvent. <a href="/p/devirtualizing-a-toy-vm/">VM-based obfuscation</a> is the
+heavyweight; these three are what you meet first.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./protected</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>toolchain</dt><dd>an LLVM-based obfuscator (MBA + opaque predicates + CFF)</dd></div><div><dt>goal</dt><dd>recover the handful of real operations under the noise</dd></div></dl></div></figure>
+<h2 id="mba-arithmetic-that-hides-arithmetic">MBA — arithmetic that hides arithmetic<a class="headerlink" href="#mba-arithmetic-that-hides-arithmetic" title="Permanent link">#</a></h2>
+<p>Mixed boolean-arithmetic rewrites a simple operation as a sprawling mix of <code class="highlight">+ - ^&amp; | ~</code> that is <em>algebraically identical</em> but unreadable. The canonical seed
+identity:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>x</mi><mo>&#x0002B;</mo><mi>y</mi><mo>&#x0003D;</mo><mo stretchy="false">&#x00028;</mo><mi>x</mi><mo>&#x02295;</mo><mi>y</mi><mo stretchy="false">&#x00029;</mo><mo>&#x0002B;</mo><mn>2</mn><mspace width="0.167em" /><mo stretchy="false">&#x00028;</mo><mi>x</mi><mo lspace="0.22em" rspace="0.22em"><mrow><mi>&#x00026;</mi></mrow></mo><mi>y</mi><mo stretchy="false">&#x00029;</mo></mrow></math></div>
+<p>Apply it recursively and <code class="highlight">a + b</code> becomes a half-screen of nonsense. You don't
+simplify it by staring — you either pattern-match known identities, or treat the
+expression as a black box and <strong>synthesize</strong> the simplest equivalent from its
+input/output behaviour:</p>
+<figure class="codeblock"><figcaption><span class="fname">simplify MBA by synthesis (msynth / SiMBA-style)</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#simplify-mba-by-synthesis-msynth-simba-style-1">1</a></span>
+<span class="normal"><a href="#simplify-mba-by-synthesis-msynth-simba-style-2">2</a></span>
+<span class="normal"><a href="#simplify-mba-by-synthesis-msynth-simba-style-3">3</a></span>
+<span class="normal"><a href="#simplify-mba-by-synthesis-msynth-simba-style-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="simplify-mba-by-synthesis-msynth-simba-style-1"><span class="c1"># observe the obfuscated expression as a function of its inputs, then ask a</span>
+</span><span id="simplify-mba-by-synthesis-msynth-simba-style-2"><span class="c1"># synthesizer for the smallest expression that reproduces every output.</span>
+</span><span id="simplify-mba-by-synthesis-msynth-simba-style-3"><span class="n">expr</span> <span class="o">=</span> <span class="s2">&quot;(x ^ y) + 2*(x &amp; y)&quot;</span>          <span class="c1"># lifted from the disassembly</span>
+</span><span id="simplify-mba-by-synthesis-msynth-simba-style-4"><span class="nb">print</span><span class="p">(</span><span class="n">simplify_mba</span><span class="p">(</span><span class="n">expr</span><span class="p">))</span>             <span class="c1"># -&gt; &quot;x + y&quot;</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>For linear MBA this is fast and exact; SMT-backed simplifiers (<code class="highlight">arybo</code>) prove the
+equivalence outright. Once each blob collapses to its one real op, the function
+becomes legible again.</p>
+<h2 id="opaque-predicates-branches-that-arent">opaque predicates — branches that aren't<a class="headerlink" href="#opaque-predicates-branches-that-arent" title="Permanent link">#</a></h2>
+<p>An opaque predicate is a test the obfuscator <em>knows</em> the outcome of — e.g.
+<code class="highlight">7*x*x - 1 != y*y</code> is true for all integers — wired into an <code class="highlight">if</code> so one side is
+dead code (often bogus, to waste your time). Don't reason about it; ask a solver
+whether the condition can ever take the other value:</p>
+<figure class="codeblock"><figcaption><span class="fname">prove a predicate constant with an SMT solver</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#prove-a-predicate-constant-with-an-smt-solver-1">1</a></span>
+<span class="normal"><a href="#prove-a-predicate-constant-with-an-smt-solver-2">2</a></span>
+<span class="normal"><a href="#prove-a-predicate-constant-with-an-smt-solver-3">3</a></span>
+<span class="normal"><a href="#prove-a-predicate-constant-with-an-smt-solver-4">4</a></span>
+<span class="normal"><a href="#prove-a-predicate-constant-with-an-smt-solver-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="prove-a-predicate-constant-with-an-smt-solver-1"><span class="kn">import</span><span class="w"> </span><span class="nn">z3</span>
+</span><span id="prove-a-predicate-constant-with-an-smt-solver-2"><span class="n">x</span> <span class="o">=</span> <span class="n">z3</span><span class="o">.</span><span class="n">BitVec</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="mi">64</span><span class="p">)</span>
+</span><span id="prove-a-predicate-constant-with-an-smt-solver-3"><span class="n">cond</span> <span class="o">=</span> <span class="mi">7</span><span class="o">*</span><span class="n">x</span><span class="o">*</span><span class="n">x</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">!=</span> <span class="n">x</span><span class="o">*</span><span class="n">x</span>            <span class="c1"># the branch condition, lifted</span>
+</span><span id="prove-a-predicate-constant-with-an-smt-solver-4"><span class="n">s</span> <span class="o">=</span> <span class="n">z3</span><span class="o">.</span><span class="n">Solver</span><span class="p">();</span> <span class="n">s</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">z3</span><span class="o">.</span><span class="n">Not</span><span class="p">(</span><span class="n">cond</span><span class="p">))</span>
+</span><span id="prove-a-predicate-constant-with-an-smt-solver-5"><span class="nb">print</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">check</span><span class="p">())</span>                   <span class="c1"># unsat -&gt; always true -&gt; the else-branch is dead</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">unsat</code> on the negation means the predicate is constant: prune the dead branch and
+the bogus control flow it guarded evaporates.</p>
+<h2 id="control-flow-flattening-the-dispatcher">control-flow flattening — the dispatcher<a class="headerlink" href="#control-flow-flattening-the-dispatcher" title="Permanent link">#</a></h2>
+<p>Flattening shreds a function into basic blocks hung off a central <code class="highlight">switch (state)</code>
+dispatcher; the original order survives only as a runtime <code class="highlight">state</code> variable. Static
+reading order tells you nothing. <strong>Symbolically execute the dispatcher</strong>: start at
+each block, let the engine compute the next <code class="highlight">state</code>, and rebuild the edges into
+the original CFG:</p>
+<figure class="codeblock"><figcaption><span class="fname">recovering the real edges</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#recovering-the-real-edges-1">1</a></span>
+<span class="normal"><a href="#recovering-the-real-edges-2">2</a></span>
+<span class="normal"><a href="#recovering-the-real-edges-3">3</a></span>
+<span class="normal"><a href="#recovering-the-real-edges-4">4</a></span>
+<span class="normal"><a href="#recovering-the-real-edges-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="recovering-the-real-edges-1">for each real block B:
+</span><span id="recovering-the-real-edges-2">    run B symbolically from its entry
+</span><span id="recovering-the-real-edges-3">    solve for the `state` value it writes
+</span><span id="recovering-the-real-edges-4">    -&gt; that value selects the next block in the dispatcher
+</span><span id="recovering-the-real-edges-5">    add edge B -&gt; next; repeat until the graph closes
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Triton/angr drive this; Hex-Rays plugins (<code class="highlight">d810</code>-style) do it inline in the
+decompiler. The output is the de-flattened function — the dispatcher and its state
+machine gone, the real basic-block order restored.</p>
+<details class="spoiler">
+<summary>what was under all of it</summary>
+<p>Three transforms, three solvents — and the "protected" check was nine lines:
+<figure class="codeblock"><figcaption><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="kt">int</span><span class="w"> </span><span class="nf">verify</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">k</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="code-2"><span class="w">    </span><span class="kt">unsigned</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+</span><span id="code-3"><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="p">[</span><span class="n">i</span><span class="p">];</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">s</span><span class="o">*</span><span class="mi">31</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">k</span><span class="p">[</span><span class="n">i</span><span class="p">];</span><span class="w">   </span><span class="c1">// a plain rolling hash</span>
+</span><span id="code-4"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mh">0x1d8f3a91</span><span class="p">;</span>
+</span><span id="code-5"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<p>The mindset that matters: obfuscation raises the <em>cost</em> of understanding, it
+doesn't change <em>what the code does</em>. MBA is identities, opaque predicates are
+solver queries, flattening is a state machine you can replay. Match each to its
+inverse and the wall comes down to the few lines it was always hiding.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-02-09</span><a class="row__tag" href="/tags/re/">re</a><a class="row__title" href="/p/devirtualizing-a-toy-vm/">devirtualizing a toy VM obfuscator</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-02</span><a class="row__tag" href="/tags/re/">re</a><a class="row__title" href="/p/rizin-radare2-in-anger/">rizin and radare2 in anger</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-04-22</span><a class="row__tag" href="/tags/re/">re</a><a class="row__title" href="/p/first-five-minutes-unknown-binary/">the first five minutes with an unknown binary</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/printf-is-a-write-primitive/"><span class="lbl">&#8249; newer</span>printf is a write primitive</a><a class="next" href="/p/slab-uaf-modprobe/"><span class="lbl">older &#8250;</span>a slab use-after-free, from ioctl to root</a></nav></main>
+
+    <footer class="status">
+      <span>40 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

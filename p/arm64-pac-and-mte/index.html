@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>PAC and MTE — how ARM64&#x27;s new walls fall — algoatson.github.io</title>
+<meta name="description" content="ARMv8.3 signs pointers with a cryptographic MAC in their spare bits; ARMv8.5 tags every allocation with a 4-bit lock the pointer must match. Both are real upgrades over the stack canary — and both are beaten by the same old moves: a leak, a signing gadget, or a brute force the field is too small to resist.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/arm64-pac-and-mte/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="PAC and MTE — how ARM64&#x27;s new walls fall — algoatson.github.io">
+<meta property="og:description" content="ARMv8.3 signs pointers with a cryptographic MAC in their spare bits; ARMv8.5 tags every allocation with a 4-bit lock the pointer must match. Both are real upgrades over the stack canary — and both are beaten by the same old moves: a leak, a signing gadget, or a brute force the field is too small to resist.">
+<meta property="og:url" content="https://algoatson.github.io/p/arm64-pac-and-mte/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/arm64-pac-and-mte.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "PAC and MTE — how ARM64's new walls fall", "datePublished": "2026-06-02", "dateModified": "2026-06-02", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "ARMv8.3 signs pointers with a cryptographic MAC in their spare bits; ARMv8.5 tags every allocation with a 4-bit lock the pointer must match. Both are real upgrades over the stack canary — and both are beaten by the same old moves: a leak, a signing gadget, or a brute force the field is too small to resist.", "url": "https://algoatson.github.io/p/arm64-pac-and-mte/", "mainEntityOfPage": "https://algoatson.github.io/p/arm64-pac-and-mte/", "keywords": "pwn, internals, arm"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>PAC and MTE — how ARM64&#x27;s new walls fall</h1>
+  <div class="meta"><span>2026-06-02</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/internals/">internals</a> <a class="tag" href="/tags/arm/">arm</a></div>
+</header>
+
+<div class="postwrap">
+  
+  <article class="prose"><p>x86 leaned on the <a href="/p/the-stack-canary-from-the-source/">stack canary</a> for two
+decades. ARM64 raised the bar twice: <strong>PAC</strong> cryptographically signs pointers, and
+<strong>MTE</strong> tags memory so a stale or out-of-bounds pointer doesn't match its target.
+They're genuinely stronger. They also fail to the same primitives we always reach
+for — leaks, oracles, and brute force against a field that's only a few bits wide.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>aarch64</dd></div><div><dt>PAC</dt><dd>on   (ARMv8.3 pointer authentication)</dd></div><div><dt>MTE</dt><dd>on   (ARMv8.5 memory tagging, synchronous)</dd></div><div><dt>note</dt><dd>both are probabilistic / key-based, not absolute</dd></div></dl></div></figure>
+<h2 id="pac-a-mac-in-the-pointers-spare-bits">PAC — a MAC in the pointer's spare bits<a class="headerlink" href="#pac-a-mac-in-the-pointers-spare-bits" title="Permanent link">#</a></h2>
+<p>A 64-bit pointer doesn't use all 64 bits for the address. PAC fills the unused
+high bits with a <strong>cryptographic MAC</strong> (QARMA) computed over the pointer, a 64-bit
+<em>modifier</em> (context salt), and a secret key held in a system register. The
+compiler signs the return address on entry and authenticates it on exit:</p>
+<figure class="codeblock"><figcaption><span class="fname">PAC prologue / epilogue</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#pac-prologue-epilogue-1">1</a></span>
+<span class="normal"><a href="#pac-prologue-epilogue-2">2</a></span>
+<span class="normal"><a href="#pac-prologue-epilogue-3">3</a></span>
+<span class="normal"><a href="#pac-prologue-epilogue-4">4</a></span>
+<span class="normal"><a href="#pac-prologue-epilogue-5">5</a></span>
+<span class="normal"><a href="#pac-prologue-epilogue-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="pac-prologue-epilogue-1"><span class="nf">paciasp</span><span class="w">                 </span><span class="c1">; sign x30 (return addr) with key A, modifier = sp</span>
+</span><span id="pac-prologue-epilogue-2"><span class="nf">stp</span><span class="w">  </span><span class="no">x29</span><span class="p">,</span><span class="w"> </span><span class="no">x30</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">sp</span><span class="p">,-</span><span class="mi">16</span><span class="p">]!</span>
+</span><span id="pac-prologue-epilogue-3"><span class="c1">; ... function body ...</span>
+</span><span id="pac-prologue-epilogue-4"><span class="nf">ldp</span><span class="w">  </span><span class="no">x29</span><span class="p">,</span><span class="w"> </span><span class="no">x30</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">sp</span><span class="p">],</span><span class="mi">16</span>
+</span><span id="pac-prologue-epilogue-5"><span class="nf">autiasp</span><span class="w">                 </span><span class="c1">; authenticate x30 against (key A, sp); corrupt it on mismatch</span>
+</span><span id="pac-prologue-epilogue-6"><span class="nf">ret</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Overwrite the saved <code class="highlight">x30</code> with a raw gadget address and <code class="highlight">autiasp</code> fails: it flips
+the pointer to a poison value and the <code class="highlight">ret</code> faults (on FPAC, it faults
+immediately). You can't forge the MAC without the key. So you don't forge it:</p>
+<ul>
+<li><strong>Signing gadget / oracle.</strong> Find code that runs <code class="highlight">pac*</code> on a pointer <em>you</em>
+  control with the key and modifier you need — now the hardware signs your gadget
+  for you. The most reliable PAC bypass there is.</li>
+<li><strong>Leak and replay.</strong> A signed pointer is valid for its <code class="highlight">(key, modifier)</code> pair. If
+  the same modifier recurs (or pointers are signed with modifier <code class="highlight">0</code>), leak one
+  signed pointer and reuse it wherever that context applies.</li>
+<li><strong>Brute force a small field.</strong> With a 48-bit VA the PAC is ~16 bits. If failures
+  don't hard-crash (a forking service), guessing is cheap — expect about <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mn>2</mn><mrow><mi>b</mi><mo>&#x02212;</mo><mn>1</mn></mrow></msup></mrow></math></span>
+  tries for a <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>b</mi></mrow></math></span>-bit field, and here <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>b</mi><mo>&#x02248;</mo><mn>16</mn></mrow></math></span>.</li>
+<li><strong>PACMAN.</strong> A speculative side channel leaks whether a guessed PAC was correct
+  <em>without</em> the architectural crash — turning the brute force above into a silent
+  oracle.</li>
+</ul>
+<h2 id="mte-a-4-bit-lock-on-every-allocation">MTE — a 4-bit lock on every allocation<a class="headerlink" href="#mte-a-4-bit-lock-on-every-allocation" title="Permanent link">#</a></h2>
+<p>MTE tags each aligned <strong>16-byte granule</strong> of memory with a 4-bit value, and stores
+a 4-bit tag in the pointer's top byte (top-byte-ignore). Every access checks
+<strong>pointer tag == memory tag</strong>; a mismatch faults. The allocator tags each new
+allocation randomly, retags on free, and gives neighbours different tags:</p>
+<figure class="codeblock"><figcaption><span class="fname">why UAF and linear overflow get caught</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#why-uaf-and-linear-overflow-get-caught-1">1</a></span>
+<span class="normal"><a href="#why-uaf-and-linear-overflow-get-caught-2">2</a></span>
+<span class="normal"><a href="#why-uaf-and-linear-overflow-get-caught-3">3</a></span>
+<span class="normal"><a href="#why-uaf-and-linear-overflow-get-caught-4">4</a></span>
+<span class="normal"><a href="#why-uaf-and-linear-overflow-get-caught-5">5</a></span>
+<span class="normal"><a href="#why-uaf-and-linear-overflow-get-caught-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="why-uaf-and-linear-overflow-get-caught-1">alloc A -&gt; memory granules tagged 0x7, pointer tagged 0x7   ✓ access ok
+</span><span id="why-uaf-and-linear-overflow-get-caught-2">free  A -&gt; granules retagged 0xc                            ; pointer still 0x7
+</span><span id="why-uaf-and-linear-overflow-get-caught-3">use   A -&gt; 0x7 != 0xc                                       ✗ FAULT (use-after-free)
+</span><span id="why-uaf-and-linear-overflow-get-caught-4">
+</span><span id="why-uaf-and-linear-overflow-get-caught-5">alloc A (tag 0x7) | alloc B (tag 0x2)
+</span><span id="why-uaf-and-linear-overflow-get-caught-6">overflow A into B -&gt; writing with the 0x7 pointer into 0x2  ✗ FAULT (overflow)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Deterministic-feeling, but it's <strong>probabilistic</strong> — only 4 bits:</p>
+<ul>
+<li><strong>Guess the tag.</strong> 16 possible tags, so a blind forge matches 1 in 16 —
+  <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>P</mi><mo stretchy="false">&#x00028;</mo><mtext>match</mtext><mo stretchy="false">&#x00029;</mo><mo>&#x0003D;</mo><mstyle displaystyle="false" scriptlevel="0"><mfrac><mrow><mn>1</mn></mrow><mrow><mn>16</mn></mrow></mfrac></mstyle></mrow></math></span>. In async mode, or anywhere a wrong guess
+  doesn't kill the process, you just retry.</li>
+<li><strong>Leak the tag.</strong> Any primitive that reveals the target pointer reveals its tag
+  too; forge a pointer with the matching top byte and the check passes every time.</li>
+<li><strong>Stay in the granule.</strong> Corruption <em>within</em> the same 16-byte granule shares the
+  tag — MTE never sees it. Sub-granule overwrites slip through.</li>
+<li><strong>Hit untagged memory.</strong> MTE usually covers the heap; stack/globals may be
+  untagged depending on config — corrupt those instead.</li>
+</ul>
+<details class="spoiler">
+<summary>the shape of a modern aarch64 exploit</summary>
+<p>Leak first (a tag for MTE, a signed pointer or signing gadget for PAC), then
+the classic chain runs — the mitigations changed the <em>price of the leak</em>, not
+the existence of the bug:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{16_bits_is_not_a_lot_of_bits}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<p>PAC and MTE are the best mainstream memory-safety mitigations shipping — they turn
+"corrupt a pointer" into "leak, or guess a small field, or find a gadget that
+signs for you." That's a real tax. But it's a tax, not a wall: the bug still
+exists, and the same leak that armed every x86 exploit arms these too.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-10</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/glibc-heap-internals/"><span class="lbl">&#8249; newer</span>the glibc heap, from the chunk up</a><a class="next" href="/p/rizin-radare2-in-anger/"><span class="lbl">older &#8250;</span>rizin and radare2 in anger</a></nav></main>
+
+    <footer class="status">
+      <span>40 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

