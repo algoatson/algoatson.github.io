@@ -715,7 +715,7 @@ figure.img figcaption::before { content: "// "; color: var(--accent); font-famil
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .progress, .bar, .frame__legend, .frame__addr, .status, .backlink, .pager,
-  aside.toc, .palette-mask, .help-mask, .skip, .searchbtn, .related,
+  aside.toc, .series, .palette-mask, .help-mask, .skip, .searchbtn, .related,
   .copy, .nums, .headerlink, html[data-crt="on"] body::after { display: none !important; }
   .wrap { max-width: none; padding: 0; }
   .frame { border: 0; }
