@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>angr — let the solver read the check for you — algoatson.github.io</title>
+<meta name="description" content="A crackme transforms your input and compares it to a target. Instead of reversing the transform by hand, mark the input symbolic, point angr at the &quot;correct&quot; branch, and let the SMT solver invert the whole thing. When it works it&#x27;s seconds; knowing when it won&#x27;t is the actual skill.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/angr-symbolic-crackme/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="angr — let the solver read the check for you — algoatson.github.io">
+<meta property="og:description" content="A crackme transforms your input and compares it to a target. Instead of reversing the transform by hand, mark the input symbolic, point angr at the &quot;correct&quot; branch, and let the SMT solver invert the whole thing. When it works it&#x27;s seconds; knowing when it won&#x27;t is the actual skill.">
+<meta property="og:url" content="https://algoatson.github.io/p/angr-symbolic-crackme/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/angr-symbolic-crackme.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "angr — let the solver read the check for you", "datePublished": "2026-02-08", "dateModified": "2026-02-08", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A crackme transforms your input and compares it to a target. Instead of reversing the transform by hand, mark the input symbolic, point angr at the \"correct\" branch, and let the SMT solver invert the whole thing. When it works it's seconds; knowing when it won't is the actual skill.", "url": "https://algoatson.github.io/p/angr-symbolic-crackme/", "mainEntityOfPage": "https://algoatson.github.io/p/angr-symbolic-crackme/", "keywords": "re, ctf, tools"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>angr — let the solver read the check for you</h1>
+  <div class="meta"><span>2026-02-08</span><span>3 min read</span><a class="tag" href="/tags/re/">re</a> <a class="tag" href="/tags/ctf/">ctf</a> <a class="tag" href="/tags/tools/">tools</a></div>
+</header>
+
+<div class="postwrap">
+  
+  <article class="prose"><p>Here's a crackme: it reads a key, mangles it through a few rounds of arithmetic,
+and prints <code class="highlight">correct</code> or <code class="highlight">nope</code>. You <em>could</em> reverse the mangling by hand and
+write an inverse. Or you can mark the input as an unknown, tell a symbolic
+execution engine "find a path that reaches <code class="highlight">correct</code> and avoids <code class="highlight">nope</code>," and let
+the constraint solver work out what bytes satisfy every comparison on the way.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./crackme</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>check</dt><dd>input -&gt; arithmetic rounds -&gt; strcmp against a computed target</dd></div><div><dt>goal</dt><dd>recover a key that prints &quot;correct&quot; without inverting the maths</dd></div></dl></div></figure>
+<h2 id="mark-the-input-unknown-name-the-two-exits">mark the input unknown, name the two exits<a class="headerlink" href="#mark-the-input-unknown-name-the-two-exits" title="Permanent link">#</a></h2>
+<p>angr explores the binary's paths over <em>symbolic</em> values. You give it a symbolic
+input, a <code class="highlight">find</code> address (the print of <code class="highlight">correct</code>) and an <code class="highlight">avoid</code> address (the
+failure print), and it searches for a state that reached <code class="highlight">find</code>. Pull the
+addresses out of the disassembly first:</p>
+<figure class="codeblock"><figcaption><span class="fname">objdump -d ./crackme  (the two leaves)</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#objdump--d-crackme-the-two-leaves-1">1</a></span>
+<span class="normal"><a href="#objdump--d-crackme-the-two-leaves-2">2</a></span>
+<span class="normal"><a href="#objdump--d-crackme-the-two-leaves-3">3</a></span>
+<span class="normal"><a href="#objdump--d-crackme-the-two-leaves-4">4</a></span>
+<span class="normal"><a href="#objdump--d-crackme-the-two-leaves-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="objdump--d-crackme-the-two-leaves-1">  4011d2: lea  rdi, [rip+0xe2a]   ; &quot;correct&quot;   &lt;- find
+</span><span id="objdump--d-crackme-the-two-leaves-2">  4011d9: call puts
+</span><span id="objdump--d-crackme-the-two-leaves-3">  ...
+</span><span id="objdump--d-crackme-the-two-leaves-4">  401205: lea  rdi, [rip+0xe0b]   ; &quot;nope&quot;      &lt;- avoid
+</span><span id="objdump--d-crackme-the-two-leaves-5">  40120c: call puts
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<figure class="codeblock"><figcaption><span class="fname">solve.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#solvepy-1"> 1</a></span>
+<span class="normal"><a href="#solvepy-2"> 2</a></span>
+<span class="normal"><a href="#solvepy-3"> 3</a></span>
+<span class="normal"><a href="#solvepy-4"> 4</a></span>
+<span class="normal"><a href="#solvepy-5"> 5</a></span>
+<span class="normal"><a href="#solvepy-6"> 6</a></span>
+<span class="normal"><a href="#solvepy-7"> 7</a></span>
+<span class="normal"><a href="#solvepy-8"> 8</a></span>
+<span class="normal"><a href="#solvepy-9"> 9</a></span>
+<span class="normal"><a href="#solvepy-10">10</a></span>
+<span class="normal"><a href="#solvepy-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="solvepy-1"><span class="kn">import</span><span class="w"> </span><span class="nn">angr</span><span class="o">,</span><span class="w"> </span><span class="nn">claripy</span>
+</span><span id="solvepy-2"><span class="n">proj</span>  <span class="o">=</span> <span class="n">angr</span><span class="o">.</span><span class="n">Project</span><span class="p">(</span><span class="s2">&quot;./crackme&quot;</span><span class="p">,</span> <span class="n">auto_load_libs</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="solvepy-3">
+</span><span id="solvepy-4"><span class="n">flag</span>  <span class="o">=</span> <span class="n">claripy</span><span class="o">.</span><span class="n">BVS</span><span class="p">(</span><span class="s2">&quot;flag&quot;</span><span class="p">,</span> <span class="mi">8</span> <span class="o">*</span> <span class="mi">16</span><span class="p">)</span>             <span class="c1"># 16 unknown bytes</span>
+</span><span id="solvepy-5"><span class="n">state</span> <span class="o">=</span> <span class="n">proj</span><span class="o">.</span><span class="n">factory</span><span class="o">.</span><span class="n">full_init_state</span><span class="p">(</span><span class="n">stdin</span><span class="o">=</span><span class="n">flag</span><span class="p">)</span>
+</span><span id="solvepy-6"><span class="hll"><span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">flag</span><span class="o">.</span><span class="n">chop</span><span class="p">(</span><span class="mi">8</span><span class="p">):</span>                           <span class="c1"># keep it printable</span>
+</span></span><span id="solvepy-7"><span class="hll">    <span class="n">state</span><span class="o">.</span><span class="n">solver</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">b</span> <span class="o">&gt;=</span> <span class="mh">0x20</span><span class="p">,</span> <span class="n">b</span> <span class="o">&lt;=</span> <span class="mh">0x7e</span><span class="p">)</span>
+</span></span><span id="solvepy-8"><span class="hll">
+</span></span><span id="solvepy-9"><span class="hll"><span class="n">simgr</span> <span class="o">=</span> <span class="n">proj</span><span class="o">.</span><span class="n">factory</span><span class="o">.</span><span class="n">simulation_manager</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+</span></span><span id="solvepy-10"><span class="hll"><span class="n">simgr</span><span class="o">.</span><span class="n">explore</span><span class="p">(</span><span class="n">find</span><span class="o">=</span><span class="mh">0x4011d2</span><span class="p">,</span> <span class="n">avoid</span><span class="o">=</span><span class="mh">0x401205</span><span class="p">)</span>     <span class="c1"># the two addresses above</span>
+</span></span><span id="solvepy-11"><span class="nb">print</span><span class="p">(</span><span class="n">simgr</span><span class="o">.</span><span class="n">found</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">posix</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>             <span class="c1"># the stdin that reaches &quot;correct&quot;</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">explore</code> walks both branches at every comparison, accumulating constraints
+(<code class="highlight">input[3] ^ 0x5a == 0x31</code>, …). The moment a state reaches <code class="highlight">find</code>, the solver has
+a system of equations with one satisfying assignment — your key — and
+<code class="highlight">posix.dumps(0)</code> prints the exact stdin that produced it.</p>
+<details class="spoiler">
+<summary>the key the solver inverted</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">$ python3 solve.py
+</span><span id="code-2">b&#39;r3v_by_c0nstr4int&#39;
+</span><span id="code-3">correct
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="the-part-the-tutorials-skip-when-it-wont">the part the tutorials skip: when it won't<a class="headerlink" href="#the-part-the-tutorials-skip-when-it-wont" title="Permanent link">#</a></h2>
+<p>Symbolic execution is not magic; it's a search, and the search blows up:</p>
+<ul>
+<li><strong>Path explosion.</strong> Every input-dependent branch forks the state. A loop over
+  your 16 bytes with a branch inside is <code class="highlight">2^16</code> paths — minutes to never. <strong>Hook the
+  hot function</strong> with a <code class="highlight">SimProcedure</code>, or <code class="highlight">explore</code> toward an address <em>past</em> the
+  loop, or constrain bytes up front (as above) to prune dead branches.</li>
+<li><strong>Crypto and hashes.</strong> A real hash (SHA-256, AES) produces constraints the SMT
+  solver can't invert in any human timescale — that's the point of a hash. If the
+  check is <code class="highlight">sha256(key) == const</code>, angr will grind forever; reverse it by hand or
+  attack the key space instead.</li>
+<li><strong>Environment.</strong> Syscalls, threading, <code class="highlight">rdtsc</code>, and libc internals can derail the
+  engine; <code class="highlight">auto_load_libs=False</code> plus <code class="highlight">SimProcedure</code> stubs for the noisy calls
+  keeps it on the part you actually care about.</li>
+</ul>
+<div class="admonition tip">
+<p class="admonition-title">use it as a scalpel, not a hammer</p>
+<p>The win isn't "throw angr at the whole binary." It's: reverse far enough to
+find the <em>one</em> function that does the check, <code class="highlight">proj.factory.call_state</code> straight
+into it with symbolic args, and let the solver finish the last mile. Minutes of
+reversing to save hours, instead of waiting on a state explosion you could have
+pruned.</p>
+</div>
+<p>When the check is pure arithmetic over your input, angr feels like cheating — you
+describe the destination and it derives the path. The skill that matters is
+recognising the cases where the solver can't help, and not burning an afternoon
+watching the active-state count climb.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-02</span><a class="row__tag" href="/tags/re/">re</a><a class="row__title" href="/p/rizin-radare2-in-anger/">rizin and radare2 in anger</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/devirtualizing-a-toy-vm/"><span class="lbl">&#8249; newer</span>devirtualizing a toy VM obfuscator</a><a class="next" href="/p/ret2libc-warmup/"><span class="lbl">older &#8250;</span>ret2libc on a warm-up: stack smash to shell</a></nav></main>
+
+    <footer class="status">
+      <span>36 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

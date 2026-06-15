@@ -4,9 +4,9 @@
     <title>algoatson.github.io</title>
     <link>https://algoatson.github.io/</link>
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>a from-scratch walk through the most reliable beginner heap primitive — what the tcache is, why poisoning works, and how safe-linking changed the recipe. Educational target, not a real CVE.</description>
+    <description>A toy char driver frees an object and keeps the pointer. From there it&#x27;s the usual kernel kata — reclaim the slot with a spray, leak KASLR through the dangling read, then turn the dangling write into a modprobe_path overwrite.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 14:12:35 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 14:16:49 +0000</lastBuildDate>
     <item>
       <title>House of Apple 2 — FSOP after the hooks died</title>
       <link>https://algoatson.github.io/p/house-of-apple-2/</link>
@@ -144,6 +144,14 @@
       <description>The pwntools I reach for from memory — the template, tubes, packing, the ELF/libc helpers, format-string and shellcode one-liners, and the CLI subcommands that replace a pile of little scripts. Real snippets, copy-paste shaped.</description>
     </item>
     <item>
+      <title>SROP — one syscall, every register</title>
+      <link>https://algoatson.github.io/p/srop-one-syscall-every-register/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/srop-one-syscall-every-register/</guid>
+      <pubDate>Fri, 22 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category>
+      <description>A signal return restores the entire CPU state from a frame on the stack. Forge that frame and a single rt_sigreturn sets rax, rdi, rsi, rdx, rip and rsp at once — the densest gadget in the binary, perfect when you have almost nothing to work with.</description>
+    </item>
+    <item>
       <title>one keybind to checksec everything</title>
       <link>https://algoatson.github.io/p/checksec-everything/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/checksec-everything/</guid>
@@ -158,6 +166,14 @@
       <pubDate>Tue, 12 May 2026 00:00:00 +0000</pubDate>
       <category>pwn</category><category>rop</category><category>tooling</category>
       <description>NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.</description>
+    </item>
+    <item>
+      <title>ret2dlresolve — a shell with no libc leak</title>
+      <link>https://algoatson.github.io/p/ret2dlresolve-no-leak/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/ret2dlresolve-no-leak/</guid>
+      <pubDate>Sun, 10 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category><category>internals</category>
+      <description>When you can&#x27;t leak libc, make the dynamic linker resolve system() for you. Forge a relocation, a symbol, and a string, point the lazy-binding machinery at them, and _dl_runtime_resolve looks up the address you couldn&#x27;t.</description>
     </item>
     <item>
       <title>pwndbg muscle memory</title>
@@ -192,6 +208,14 @@
       <description>A survey of the anti-debug checks you trip over on Linux RE targets — what each one measures, the one line that gives it away, and the cheapest defeat. Folded one per card so you can skim to the one that&#x27;s biting you right now.</description>
     </item>
     <item>
+      <title>fuzzing a parser with AFL++, harness first</title>
+      <link>https://algoatson.github.io/p/afl-harness-a-parser/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/afl-harness-a-parser/</guid>
+      <pubDate>Sat, 28 Mar 2026 00:00:00 +0000</pubDate>
+      <category>fuzzing</category><category>tools</category>
+      <description>A fuzzer is only as good as the harness you point it at. Write a tight persistent-mode target around the parser, build it with instrumentation + ASAN, feed it a real corpus, and let coverage feedback find the inputs you never would. Then triage what falls out.</description>
+    </item>
+    <item>
       <title>two signatures, one nonce: recovering an ECDSA key</title>
       <link>https://algoatson.github.io/p/ecdsa-nonce-reuse/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/ecdsa-nonce-reuse/</guid>
@@ -222,30 +246,6 @@
       <pubDate>Sat, 14 Feb 2026 00:00:00 +0000</pubDate>
       <category>kernel</category><category>pwn</category><category>linux</category>
       <description>A toy char driver frees an object and keeps the pointer. From there it&#x27;s the usual kernel kata — reclaim the slot with a spray, leak KASLR through the dangling read, then turn the dangling write into a modprobe_path overwrite.</description>
-    </item>
-    <item>
-      <title>devirtualizing a toy VM obfuscator</title>
-      <link>https://algoatson.github.io/p/devirtualizing-a-toy-vm/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/devirtualizing-a-toy-vm/</guid>
-      <pubDate>Mon, 09 Feb 2026 00:00:00 +0000</pubDate>
-      <category>re</category><category>vm</category><category>obfuscation</category>
-      <description>VM-based obfuscation looks terrifying until you realize it&#x27;s just an interpreter you haven&#x27;t reverse engineered yet. A walk through recovering the bytecode of a custom virtual machine. Educational target.</description>
-    </item>
-    <item>
-      <title>ret2libc on a warm-up: stack smash to shell</title>
-      <link>https://algoatson.github.io/p/ret2libc-warmup/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/ret2libc-warmup/</guid>
-      <pubDate>Thu, 29 Jan 2026 00:00:00 +0000</pubDate>
-      <category>pwn</category><category>ctf</category><category>rop</category>
-      <description>A 200-point warm-up — one unbounded read into a 64-byte stack buffer. No canary, but PIE and ASLR are on, so the leak comes first. Classic ret2libc, written down end to end.</description>
-    </item>
-    <item>
-      <title>tcache poisoning, explained like you&#x27;ll have to use it</title>
-      <link>https://algoatson.github.io/p/tcache-poisoning-explained/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/tcache-poisoning-explained/</guid>
-      <pubDate>Sun, 18 Jan 2026 00:00:00 +0000</pubDate>
-      <category>heap</category><category>pwn</category><category>glibc</category>
-      <description>a from-scratch walk through the most reliable beginner heap primitive — what the tcache is, why poisoning works, and how safe-linking changed the recipe. Educational target, not a real CVE.</description>
     </item>
   </channel>
 </rss>

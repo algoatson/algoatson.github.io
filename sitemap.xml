@@ -20,17 +20,21 @@
   <url><loc>https://algoatson.github.io/p/glibc-heap-internals/</loc><lastmod>2026-06-08</lastmod></url>
   <url><loc>https://algoatson.github.io/p/rizin-radare2-in-anger/</loc><lastmod>2026-06-02</lastmod></url>
   <url><loc>https://algoatson.github.io/p/pwntools-cookbook/</loc><lastmod>2026-05-26</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/srop-one-syscall-every-register/</loc><lastmod>2026-05-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/checksec-everything/</loc><lastmod>2026-05-19</lastmod></url>
   <url><loc>https://algoatson.github.io/p/finding-gadgets/</loc><lastmod>2026-05-12</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/ret2dlresolve-no-leak/</loc><lastmod>2026-05-10</lastmod></url>
   <url><loc>https://algoatson.github.io/p/pwndbg-muscle-memory/</loc><lastmod>2026-05-01</lastmod></url>
   <url><loc>https://algoatson.github.io/p/seccomp-jails-and-their-holes/</loc><lastmod>2026-04-30</lastmod></url>
   <url><loc>https://algoatson.github.io/p/first-five-minutes-unknown-binary/</loc><lastmod>2026-04-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/anti-debug-bingo/</loc><lastmod>2026-04-09</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/afl-harness-a-parser/</loc><lastmod>2026-03-28</lastmod></url>
   <url><loc>https://algoatson.github.io/p/ecdsa-nonce-reuse/</loc><lastmod>2026-03-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/the-stack-canary-from-the-source/</loc><lastmod>2026-03-15</lastmod></url>
   <url><loc>https://algoatson.github.io/p/printf-is-a-write-primitive/</loc><lastmod>2026-02-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/slab-uaf-modprobe/</loc><lastmod>2026-02-16</lastmod></url>
   <url><loc>https://algoatson.github.io/p/devirtualizing-a-toy-vm/</loc><lastmod>2026-02-09</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/angr-symbolic-crackme/</loc><lastmod>2026-02-08</lastmod></url>
   <url><loc>https://algoatson.github.io/p/ret2libc-warmup/</loc><lastmod>2026-01-29</lastmod></url>
   <url><loc>https://algoatson.github.io/p/tcache-poisoning-explained/</loc><lastmod>2026-01-18</lastmod></url>
   <url><loc>https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/</loc><lastmod>2026-01-05</lastmod></url>
@@ -47,13 +51,15 @@
   <url><loc>https://algoatson.github.io/tags/tooling/</loc></url>
   <url><loc>https://algoatson.github.io/tags/ctf/</loc></url>
   <url><loc>https://algoatson.github.io/tags/rop/</loc></url>
+  <url><loc>https://algoatson.github.io/tags/internals/</loc></url>
   <url><loc>https://algoatson.github.io/tags/notes/</loc></url>
   <url><loc>https://algoatson.github.io/tags/seccomp/</loc></url>
   <url><loc>https://algoatson.github.io/tags/linux/</loc></url>
   <url><loc>https://algoatson.github.io/tags/anti-debug/</loc></url>
+  <url><loc>https://algoatson.github.io/tags/fuzzing/</loc></url>
+  <url><loc>https://algoatson.github.io/tags/tools/</loc></url>
   <url><loc>https://algoatson.github.io/tags/crypto/</loc></url>
   <url><loc>https://algoatson.github.io/tags/math/</loc></url>
-  <url><loc>https://algoatson.github.io/tags/internals/</loc></url>
   <url><loc>https://algoatson.github.io/tags/fmtstr/</loc></url>
   <url><loc>https://algoatson.github.io/tags/kernel/</loc></url>
   <url><loc>https://algoatson.github.io/tags/vm/</loc></url>

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>fuzzing a parser with AFL++, harness first — algoatson.github.io</title>
+<meta name="description" content="A fuzzer is only as good as the harness you point it at. Write a tight persistent-mode target around the parser, build it with instrumentation + ASAN, feed it a real corpus, and let coverage feedback find the inputs you never would. Then triage what falls out.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/afl-harness-a-parser/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="fuzzing a parser with AFL++, harness first — algoatson.github.io">
+<meta property="og:description" content="A fuzzer is only as good as the harness you point it at. Write a tight persistent-mode target around the parser, build it with instrumentation + ASAN, feed it a real corpus, and let coverage feedback find the inputs you never would. Then triage what falls out.">
+<meta property="og:url" content="https://algoatson.github.io/p/afl-harness-a-parser/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/afl-harness-a-parser.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "fuzzing a parser with AFL++, harness first", "datePublished": "2026-03-28", "dateModified": "2026-03-28", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A fuzzer is only as good as the harness you point it at. Write a tight persistent-mode target around the parser, build it with instrumentation + ASAN, feed it a real corpus, and let coverage feedback find the inputs you never would. Then triage what falls out.", "url": "https://algoatson.github.io/p/afl-harness-a-parser/", "mainEntityOfPage": "https://algoatson.github.io/p/afl-harness-a-parser/", "keywords": "fuzzing, tools"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>fuzzing a parser with AFL++, harness first</h1>
+  <div class="meta"><span>2026-03-28</span><span>3 min read</span><a class="tag" href="/tags/fuzzing/">fuzzing</a> <a class="tag" href="/tags/tools/">tools</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-harness-is-the-target">the harness is the target</a></li>
+<li><a href="#feed-it-well-then-watch-the-right-number">feed it well, then watch the right number</a></li>
+<li><a href="#triage-what-falls-out">triage what falls out</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>People treat AFL++ like a magic box: aim it at a binary, wait for crashes. The
+real leverage is upstream of that — a <strong>harness</strong> that drives the interesting code
+fast, with instrumentation so the fuzzer can <em>see</em> coverage and a sanitizer so
+shallow corruption actually crashes instead of silently limping on. Get the
+harness right and the fuzzer does the rest.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./parse_config (library function: parse_config(buf, len))</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>goal</dt><dd>reach crashes in the parser</dd></div><div><dt>strategy</dt><dd>persistent-mode harness + afl-clang-fast + ASAN + a seed corpus</dd></div></dl></div></figure>
+<h2 id="the-harness-is-the-target">the harness is the target<a class="headerlink" href="#the-harness-is-the-target" title="Permanent link">#</a></h2>
+<p>Don't fuzz the whole program through <code class="highlight">argv</code> and a fresh process per input —
+that's slow and mostly exercises startup. Wrap the <em>function under test</em> in a
+<strong>persistent-mode</strong> loop so one process handles thousands of inputs:</p>
+<figure class="codeblock"><figcaption><span class="fname">harness.c</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#harnessc-1"> 1</a></span>
+<span class="normal"><a href="#harnessc-2"> 2</a></span>
+<span class="normal"><a href="#harnessc-3"> 3</a></span>
+<span class="normal"><a href="#harnessc-4"> 4</a></span>
+<span class="normal"><a href="#harnessc-5"> 5</a></span>
+<span class="normal"><a href="#harnessc-6"> 6</a></span>
+<span class="normal"><a href="#harnessc-7"> 7</a></span>
+<span class="normal"><a href="#harnessc-8"> 8</a></span>
+<span class="normal"><a href="#harnessc-9"> 9</a></span>
+<span class="normal"><a href="#harnessc-10">10</a></span>
+<span class="normal"><a href="#harnessc-11">11</a></span>
+<span class="normal"><a href="#harnessc-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="harnessc-1"><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;unistd.h&gt;</span>
+</span><span id="harnessc-2"><span class="k">extern</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">parse_config</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+</span><span id="harnessc-3">
+</span><span id="harnessc-4"><span class="n">__AFL_FUZZ_INIT</span><span class="p">();</span>
+</span><span id="harnessc-5"><span class="kt">int</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="harnessc-6"><span class="hll"><span class="w">    </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">__AFL_FUZZ_TESTCASE_BUF</span><span class="p">;</span><span class="w">     </span><span class="c1">// shared-memory input</span>
+</span></span><span id="harnessc-7"><span class="hll"><span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">__AFL_LOOP</span><span class="p">(</span><span class="mi">10000</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w">                         </span><span class="c1">// 10k iterations / fork</span>
+</span></span><span id="harnessc-8"><span class="hll"><span class="w">        </span><span class="kt">long</span><span class="w"> </span><span class="n">len</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">__AFL_FUZZ_TESTCASE_LEN</span><span class="p">;</span>
+</span></span><span id="harnessc-9"><span class="w">        </span><span class="n">parse_config</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="n">len</span><span class="p">);</span><span class="w">                        </span><span class="c1">// &lt;- the code we care about</span>
+</span><span id="harnessc-10"><span class="w">    </span><span class="p">}</span>
+</span><span id="harnessc-11"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+</span><span id="harnessc-12"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">__AFL_LOOP</code> resets and re-runs without a fresh <code class="highlight">execve</code> each time — often a
+10–100× throughput win. Build it instrumented, with <strong>AddressSanitizer</strong> so
+out-of-bounds and use-after-free turn into loud aborts the fuzzer counts as
+crashes:</p>
+<figure class="codeblock"><figcaption><span class="fname">build + run</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#build-run-1">1</a></span>
+<span class="normal"><a href="#build-run-2">2</a></span>
+<span class="normal"><a href="#build-run-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="build-run-1">$ AFL_USE_ASAN=1 afl-clang-fast harness.c parser.o -o harness
+</span><span id="build-run-2">$ mkdir corpus &amp;&amp; printf &#39;key = value\n&#39; &gt; corpus/seed   # real, valid inputs
+</span><span id="build-run-3">$ afl-fuzz -i corpus -o out -- ./harness
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="feed-it-well-then-watch-the-right-number">feed it well, then watch the right number<a class="headerlink" href="#feed-it-well-then-watch-the-right-number" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Seed corpus.</strong> Start from <em>valid</em> inputs — real config files, sample packets.
+  The fuzzer mutates from these; garbage seeds waste hours rediscovering basic
+  structure. Then <strong>minimise</strong>: <code class="highlight">afl-cmin -i corpus -o corpus_min -- ./harness</code>
+  drops seeds that add no coverage.</li>
+<li><strong>Dictionary.</strong> Hand AFL++ the grammar's keywords (<code class="highlight">-x config.dict</code>) so it
+  splices in tokens like <code class="highlight">include</code>/<code class="highlight">{</code>/<code class="highlight">;</code> it would take ages to mutate into
+  existence.</li>
+<li><strong>The number that matters is coverage, not exec/s.</strong> A fast fuzzer stuck at flat
+  <code class="highlight">map density</code> is finding nothing. If coverage plateaus, your harness isn't
+  reaching deep code — add a <code class="highlight">-d</code> (deterministic-off) run, more seeds, or split a
+  monster function so the magic-byte checks stop gating everything.</li>
+</ul>
+<h2 id="triage-what-falls-out">triage what falls out<a class="headerlink" href="#triage-what-falls-out" title="Permanent link">#</a></h2>
+<p>Crashes land in <code class="highlight">out/default/crashes/</code>. They're raw inputs; reproduce and
+minimise before you read them:</p>
+<figure class="codeblock"><figcaption><span class="fname">reproduce + shrink</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#reproduce-shrink-1">1</a></span>
+<span class="normal"><a href="#reproduce-shrink-2">2</a></span>
+<span class="normal"><a href="#reproduce-shrink-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="reproduce-shrink-1">$ ./harness &lt; out/default/crashes/id:000003,sig:06,...     # ASAN prints the bug
+</span><span id="reproduce-shrink-2">==12345==ERROR: AddressSanitizer: heap-buffer-overflow ... in parse_config
+</span><span id="reproduce-shrink-3">$ afl-tmin -i out/default/crashes/id:000003,... -o min.bin -- ./harness
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">afl-tmin</code> shrinks a 4KB crashing input down to the handful of bytes that
+actually trip it — usually the difference between "no idea" and "oh, an unbounded
+<code class="highlight">memcpy</code> on a length field." ASAN's stack trace points at the exact line.</p>
+<details class="spoiler">
+<summary>the bug afl-tmin handed me</summary>
+<p>A length field read from the input, trusted, and used straight as a <code class="highlight">memcpy</code>
+size — three bytes of input, one heap overflow:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{the_harness_did_the_hard_part}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<p>The fuzzer is the cheap part — it's a mutation loop. The work is the harness that
+drives the right code at speed, the corpus that gives it a running start, and the
+triage that turns a folder of crashing blobs into one root cause. Do those three
+well and AFL++ finds bugs in an afternoon that a week of manual review would walk
+straight past.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-02-08</span><a class="row__tag" href="/tags/re/">re</a><a class="row__title" href="/p/angr-symbolic-crackme/">angr — let the solver read the check for you</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/anti-debug-bingo/"><span class="lbl">&#8249; newer</span>anti-debug bingo: five checks and how they fall</a><a class="next" href="/p/ecdsa-nonce-reuse/"><span class="lbl">older &#8250;</span>two signatures, one nonce: recovering an ECDSA key</a></nav></main>
+
+    <footer class="status">
+      <span>36 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

