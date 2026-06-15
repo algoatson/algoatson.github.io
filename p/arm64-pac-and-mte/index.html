@@ -42,7 +42,7 @@
   <h1>PAC and MTE — how ARM64&#x27;s new walls fall</h1>
   <div class="meta"><span>2026-06-02</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/internals/">internals</a> <a class="tag" href="/tags/arm/">arm</a></div>
 </header>
-
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/breaking-mitigations/">breaking mitigations</a><span class="series__pos">part 4 / 4 · ~13 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:100%"></span></div><ol class="series__list"><li><a href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a></li><li><a href="/p/ptr-mangle-exit-handlers/">PTR_MANGLE and hijacking the exit handlers</a></li><li><a href="/p/cet-shadow-stack-ibt/">CET — shadow stacks, IBT, and what still works</a></li><li class="cur" aria-current="true">PAC and MTE — how ARM64&#x27;s new walls fall</li></ol></aside>
 <div class="postwrap">
   
   <article class="prose"><p>x86 leaned on the <a href="/p/the-stack-canary-from-the-source/">stack canary</a> for two
@@ -130,11 +130,11 @@ the existence of the bug:
 signs for you." That's a real tax. But it's a tax, not a wall: the bug still
 exists, and the same leak that armed every x86 exploit arms these too.</p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-05</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/cet-shadow-stack-ibt/">CET — shadow stacks, IBT, and what still works</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-10</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
-<nav class="pager"><a class="prev" href="/p/tcache-stashing-unlink/"><span class="lbl">&#8249; newer</span>the tcache stashing unlink attack</a><a class="next" href="/p/rizin-radare2-in-anger/"><span class="lbl">older &#8250;</span>rizin and radare2 in anger</a></nav></main>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-31</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/setcontext-register-control/">the setcontext gadget — one call to every register</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-10</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/cet-shadow-stack-ibt/"><span class="lbl">&#8249; prev</span>CET — shadow stacks, IBT, and what still works</a></nav></main>
 
     <footer class="status">
-      <span>52 posts</span>
+      <span>58 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

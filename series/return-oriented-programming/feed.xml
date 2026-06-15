@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>return-oriented programming — algoatson.github.io</title>
+    <link>https://algoatson.github.io/series/return-oriented-programming/</link>
+    <atom:link href="https://algoatson.github.io/series/return-oriented-programming/feed.xml" rel="self" type="application/rss+xml"/>
+    <description>A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from &quot;I control one call&quot; to &quot;I control the machine&quot;.</description>
+    <language>en</language>
+    <lastBuildDate>Mon, 15 Jun 2026 15:55:02 +0000</lastBuildDate>
+    <item>
+      <title>ret2libc on a warm-up: stack smash to shell</title>
+      <link>https://algoatson.github.io/p/ret2libc-warmup/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/ret2libc-warmup/</guid>
+      <pubDate>Thu, 29 Jan 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>ctf</category><category>rop</category>
+      <description>A 200-point warm-up — one unbounded read into a 64-byte stack buffer. No canary, but PIE and ASLR are on, so the leak comes first. Classic ret2libc, written down end to end.</description>
+    </item>
+    <item>
+      <title>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</title>
+      <link>https://algoatson.github.io/p/finding-gadgets/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/finding-gadgets/</guid>
+      <pubDate>Tue, 12 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category><category>tooling</category>
+      <description>NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.</description>
+    </item>
+    <item>
+      <title>ret2csu — the universal gadget hiding in every binary</title>
+      <link>https://algoatson.github.io/p/ret2csu-universal-gadget/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/ret2csu-universal-gadget/</guid>
+      <pubDate>Thu, 15 Jan 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category>
+      <description>No &quot;pop rsi; pop rdx&quot; in your gadget set? The compiler left one behind for you. __libc_csu_init contains a register-loading sequence and an indirect call that together set rdi, rsi and rdx and call anything — the gadget you reach for when the binary is too small to have its own.</description>
+    </item>
+    <item>
+      <title>ret2dlresolve — a shell with no libc leak</title>
+      <link>https://algoatson.github.io/p/ret2dlresolve-no-leak/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/ret2dlresolve-no-leak/</guid>
+      <pubDate>Sun, 10 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category><category>internals</category>
+      <description>When you can&#x27;t leak libc, make the dynamic linker resolve system() for you. Forge a relocation, a symbol, and a string, point the lazy-binding machinery at them, and _dl_runtime_resolve looks up the address you couldn&#x27;t.</description>
+    </item>
+    <item>
+      <title>stack pivoting — when the overflow is too small</title>
+      <link>https://algoatson.github.io/p/stack-pivoting/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/stack-pivoting/</guid>
+      <pubDate>Sat, 30 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category>
+      <description>You control the return address but only have room for two or three gadgets after it. Pivot the stack: point rsp at a buffer you fully control and run the real chain from there. leave;ret, pop rsp, xchg — the move that turns a cramped overflow into unlimited ROP.</description>
+    </item>
+    <item>
+      <title>SROP — one syscall, every register</title>
+      <link>https://algoatson.github.io/p/srop-one-syscall-every-register/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/srop-one-syscall-every-register/</guid>
+      <pubDate>Fri, 22 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category>
+      <description>A signal return restores the entire CPU state from a frame on the stack. Forge that frame and a single rt_sigreturn sets rax, rdi, rsi, rdx, rip and rsp at once — the densest gadget in the binary, perfect when you have almost nothing to work with.</description>
+    </item>
+    <item>
+      <title>one_gadget — a shell in a single address</title>
+      <link>https://algoatson.github.io/p/one-gadget-constraints/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/one-gadget-constraints/</guid>
+      <pubDate>Thu, 22 Jan 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category>
+      <description>Somewhere in libc is an address that calls execve(&quot;/bin/sh&quot;, NULL, NULL) for you — if the registers and stack happen to be in the right shape when you land on it. one_gadget finds them; the constraints decide whether you can use one, and how to bend your context to fit.</description>
+    </item>
+    <item>
+      <title>the setcontext gadget — one call to every register</title>
+      <link>https://algoatson.github.io/p/setcontext-register-control/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/setcontext-register-control/</guid>
+      <pubDate>Sun, 31 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category><category>internals</category>
+      <description>A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from &quot;I control one call&quot; to &quot;I control the machine&quot;.</description>
+    </item>
+  </channel>
+</rss>

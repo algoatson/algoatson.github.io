@@ -4,7 +4,6 @@
   <url><loc>https://algoatson.github.io/page/2/</loc></url>
   <url><loc>https://algoatson.github.io/page/3/</loc></url>
   <url><loc>https://algoatson.github.io/page/4/</loc></url>
-  <url><loc>https://algoatson.github.io/page/5/</loc></url>
   <url><loc>https://algoatson.github.io/p/house-of-apple-2/</loc><lastmod>2026-06-15</lastmod></url>
   <url><loc>https://algoatson.github.io/p/house-of-spirit/</loc><lastmod>2026-06-14</lastmod></url>
   <url><loc>https://algoatson.github.io/p/poison-null-byte/</loc><lastmod>2026-06-14</lastmod></url>
@@ -20,10 +19,14 @@
   <url><loc>https://algoatson.github.io/p/the-rendering-reference/</loc><lastmod>2026-06-12</lastmod></url>
   <url><loc>https://algoatson.github.io/p/house-of-force/</loc><lastmod>2026-06-09</lastmod></url>
   <url><loc>https://algoatson.github.io/p/glibc-heap-internals/</loc><lastmod>2026-06-08</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/ptr-mangle-exit-handlers/</loc><lastmod>2026-06-07</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/reading-int-free-source-review/</loc><lastmod>2026-06-06</lastmod></url>
   <url><loc>https://algoatson.github.io/p/cet-shadow-stack-ibt/</loc><lastmod>2026-06-05</lastmod></url>
   <url><loc>https://algoatson.github.io/p/tcache-stashing-unlink/</loc><lastmod>2026-06-04</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/dirty-pipe-cve-2022-0847/</loc><lastmod>2026-06-03</lastmod></url>
   <url><loc>https://algoatson.github.io/p/arm64-pac-and-mte/</loc><lastmod>2026-06-02</lastmod></url>
   <url><loc>https://algoatson.github.io/p/rizin-radare2-in-anger/</loc><lastmod>2026-06-02</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/setcontext-register-control/</loc><lastmod>2026-05-31</lastmod></url>
   <url><loc>https://algoatson.github.io/p/stack-pivoting/</loc><lastmod>2026-05-30</lastmod></url>
   <url><loc>https://algoatson.github.io/p/pwntools-cookbook/</loc><lastmod>2026-05-26</lastmod></url>
   <url><loc>https://algoatson.github.io/p/writeup-static-srop/</loc><lastmod>2026-05-26</lastmod></url>
@@ -42,6 +45,8 @@
   <url><loc>https://algoatson.github.io/p/afl-harness-a-parser/</loc><lastmod>2026-03-28</lastmod></url>
   <url><loc>https://algoatson.github.io/p/ecdsa-nonce-reuse/</loc><lastmod>2026-03-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/the-stack-canary-from-the-source/</loc><lastmod>2026-03-15</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/spectre-v1-bounds-check-bypass/</loc><lastmod>2026-03-12</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/prime-probe-eviction-sets/</loc><lastmod>2026-03-10</lastmod></url>
   <url><loc>https://algoatson.github.io/p/flush-reload-cache-side-channel/</loc><lastmod>2026-03-08</lastmod></url>
   <url><loc>https://algoatson.github.io/p/unpacking-a-packed-binary/</loc><lastmod>2026-02-26</lastmod></url>
   <url><loc>https://algoatson.github.io/p/printf-is-a-write-primitive/</loc><lastmod>2026-02-22</lastmod></url>
@@ -66,6 +71,7 @@
   <url><loc>https://algoatson.github.io/tags/meta/</loc></url>
   <url><loc>https://algoatson.github.io/tags/reference/</loc></url>
   <url><loc>https://algoatson.github.io/tags/internals/</loc></url>
+  <url><loc>https://algoatson.github.io/tags/kernel/</loc></url>
   <url><loc>https://algoatson.github.io/tags/arm/</loc></url>
   <url><loc>https://algoatson.github.io/tags/re/</loc></url>
   <url><loc>https://algoatson.github.io/tags/tooling/</loc></url>
@@ -74,7 +80,6 @@
   <url><loc>https://algoatson.github.io/tags/notes/</loc></url>
   <url><loc>https://algoatson.github.io/tags/seccomp/</loc></url>
   <url><loc>https://algoatson.github.io/tags/linux/</loc></url>
-  <url><loc>https://algoatson.github.io/tags/kernel/</loc></url>
   <url><loc>https://algoatson.github.io/tags/anti-debug/</loc></url>
   <url><loc>https://algoatson.github.io/tags/fuzzing/</loc></url>
   <url><loc>https://algoatson.github.io/tags/crypto/</loc></url>
@@ -88,4 +93,9 @@
   <url><loc>https://algoatson.github.io/tags/site/</loc></url>
   <url><loc>https://algoatson.github.io/series/</loc></url>
   <url><loc>https://algoatson.github.io/series/glibc-heap-exploitation/</loc></url>
+  <url><loc>https://algoatson.github.io/series/breaking-mitigations/</loc></url>
+  <url><loc>https://algoatson.github.io/series/linux-kernel-exploitation/</loc></url>
+  <url><loc>https://algoatson.github.io/series/return-oriented-programming/</loc></url>
+  <url><loc>https://algoatson.github.io/series/ctf-writeups/</loc></url>
+  <url><loc>https://algoatson.github.io/series/microarchitectural-attacks/</loc></url>
 </urlset>

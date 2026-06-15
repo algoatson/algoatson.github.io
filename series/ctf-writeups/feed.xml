@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>ctf writeups — algoatson.github.io</title>
+    <link>https://algoatson.github.io/series/ctf-writeups/</link>
+    <atom:link href="https://algoatson.github.io/series/ctf-writeups/feed.xml" rel="self" type="application/rss+xml"/>
+    <description>A stripped, statically-linked binary with a stack overflow and almost nothing else — no PLT, no libc to leak, barely any gadgets. The way out is to write &quot;/bin/sh&quot; with a read, then chain two forged sigreturn frames into an execve. A clean SROP from recon to shell.</description>
+    <language>en</language>
+    <lastBuildDate>Mon, 15 Jun 2026 15:55:02 +0000</lastBuildDate>
+    <item>
+      <title>writeup: notekeeper — a UAF from menu to shell</title>
+      <link>https://algoatson.github.io/p/writeup-notekeeper-uaf/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/writeup-notekeeper-uaf/</guid>
+      <pubDate>Mon, 18 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>heap</category><category>ctf</category>
+      <description>A textbook menu-driven heap challenge, start to finish. A dangling pointer after delete gives a read and a write on freed memory; the unsorted bin leaks libc, tcache poisoning aims a freed chunk at __free_hook, and the program frees its way into a shell.</description>
+    </item>
+    <item>
+      <title>writeup: static — no libc, no leak, just SROP</title>
+      <link>https://algoatson.github.io/p/writeup-static-srop/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/writeup-static-srop/</guid>
+      <pubDate>Tue, 26 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category><category>ctf</category>
+      <description>A stripped, statically-linked binary with a stack overflow and almost nothing else — no PLT, no libc to leak, barely any gadgets. The way out is to write &quot;/bin/sh&quot; with a read, then chain two forged sigreturn frames into an execve. A clean SROP from recon to shell.</description>
+    </item>
+  </channel>
+</rss>

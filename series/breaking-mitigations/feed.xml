@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>breaking mitigations — algoatson.github.io</title>
+    <link>https://algoatson.github.io/series/breaking-mitigations/</link>
+    <atom:link href="https://algoatson.github.io/series/breaking-mitigations/feed.xml" rel="self" type="application/rss+xml"/>
+    <description>ARMv8.3 signs pointers with a cryptographic MAC in their spare bits; ARMv8.5 tags every allocation with a 4-bit lock the pointer must match. Both are real upgrades over the stack canary — and both are beaten by the same old moves: a leak, a signing gadget, or a brute force the field is too small to resist.</description>
+    <language>en</language>
+    <lastBuildDate>Mon, 15 Jun 2026 15:55:02 +0000</lastBuildDate>
+    <item>
+      <title>the stack canary, from the source</title>
+      <link>https://algoatson.github.io/p/the-stack-canary-from-the-source/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/the-stack-canary-from-the-source/</guid>
+      <pubDate>Sun, 15 Mar 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>glibc</category><category>internals</category>
+      <description>Follow one random value from the kernel&#x27;s AT_RANDOM, through glibc startup, into fs:0x28, and out to every function prologue. Reading the source explains the canary&#x27;s quirks — the null low byte, the per-process (not per-call) value — and each quirk is a bypass.</description>
+    </item>
+    <item>
+      <title>PTR_MANGLE and hijacking the exit handlers</title>
+      <link>https://algoatson.github.io/p/ptr-mangle-exit-handlers/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/ptr-mangle-exit-handlers/</guid>
+      <pubDate>Sun, 07 Jun 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>glibc</category><category>internals</category>
+      <description>glibc stores some function pointers — atexit handlers, TLS destructors, jmp_buf — mangled with a secret guard so you can&#x27;t just overwrite them with a target. Read how the mangle works, where its guard lives (fs:0x30, the canary&#x27;s neighbour), and the two moves that defeat it: leak the guard, or zero it.</description>
+    </item>
+    <item>
+      <title>CET — shadow stacks, IBT, and what still works</title>
+      <link>https://algoatson.github.io/p/cet-shadow-stack-ibt/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/cet-shadow-stack-ibt/</guid>
+      <pubDate>Fri, 05 Jun 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>internals</category>
+      <description>Intel CET puts return addresses on a second, hardware-protected stack and demands every indirect branch land on an endbr64. That ends classic ROP and JOP. It does not end exploitation — whole-function calls, data-only attacks, and the occasional shadow-stack write all walk right past it.</description>
+    </item>
+    <item>
+      <title>PAC and MTE — how ARM64&#x27;s new walls fall</title>
+      <link>https://algoatson.github.io/p/arm64-pac-and-mte/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/arm64-pac-and-mte/</guid>
+      <pubDate>Tue, 02 Jun 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>internals</category><category>arm</category>
+      <description>ARMv8.3 signs pointers with a cryptographic MAC in their spare bits; ARMv8.5 tags every allocation with a 4-bit lock the pointer must match. Both are real upgrades over the stack canary — and both are beaten by the same old moves: a leak, a signing gadget, or a brute force the field is too small to resist.</description>
+    </item>
+  </channel>
+</rss>

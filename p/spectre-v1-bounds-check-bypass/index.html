@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>Spectre v1 — the CPU runs code it shouldn&#x27;t — algoatson.github.io</title>
+<meta name="description" content="A bounds check the CPU hasn&#x27;t finished evaluating doesn&#x27;t stop it from speculatively running the code behind it. Spectre v1 trains the branch predictor to run an out-of-bounds read, encodes the secret into the cache, and reads it back with FLUSH+RELOAD after the architecture rolls everything else away.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/spectre-v1-bounds-check-bypass/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Spectre v1 — the CPU runs code it shouldn&#x27;t — algoatson.github.io">
+<meta property="og:description" content="A bounds check the CPU hasn&#x27;t finished evaluating doesn&#x27;t stop it from speculatively running the code behind it. Spectre v1 trains the branch predictor to run an out-of-bounds read, encodes the secret into the cache, and reads it back with FLUSH+RELOAD after the architecture rolls everything else away.">
+<meta property="og:url" content="https://algoatson.github.io/p/spectre-v1-bounds-check-bypass/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/spectre-v1-bounds-check-bypass.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "Spectre v1 — the CPU runs code it shouldn't", "datePublished": "2026-03-12", "dateModified": "2026-03-12", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A bounds check the CPU hasn't finished evaluating doesn't stop it from speculatively running the code behind it. Spectre v1 trains the branch predictor to run an out-of-bounds read, encodes the secret into the cache, and reads it back with FLUSH+RELOAD after the architecture rolls everything else away.", "url": "https://algoatson.github.io/p/spectre-v1-bounds-check-bypass/", "mainEntityOfPage": "https://algoatson.github.io/p/spectre-v1-bounds-check-bypass/", "keywords": "side-channel, research"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>Spectre v1 — the CPU runs code it shouldn&#x27;t</h1>
+  <div class="meta"><span>2026-03-12</span><span>3 min read</span><a class="tag" href="/tags/side-channel/">side-channel</a> <a class="tag" href="/tags/research/">research</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/microarchitectural-attacks/">microarchitectural attacks</a><span class="series__pos">part 3 / 3 · ~9 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:100%"></span></div><ol class="series__list"><li><a href="/p/flush-reload-cache-side-channel/">FLUSH+RELOAD — reading secrets through the cache</a></li><li><a href="/p/prime-probe-eviction-sets/">Prime+Probe — a side channel with nothing shared</a></li><li class="cur" aria-current="true">Spectre v1 — the CPU runs code it shouldn&#x27;t</li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#speculation-leaves-a-trace-it-cant-take-back">speculation leaves a trace it can't take back</a></li>
+<li><a href="#the-gadget">the gadget</a></li>
+<li><a href="#stopping-it-and-the-cost">stopping it (and the cost)</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The first two parts treated the cache as an oracle for what a victim <em>did</em>. Spectre
+turns it into an oracle for what a victim's CPU <em>speculated</em> — code that, by the
+architecture's rules, never officially ran. It's the attack that made
+"microarchitectural state is security state" impossible to ignore.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>cve</dt><dd>CVE-2017-5753 (Spectre variant 1, bounds-check bypass)</dd></div><div><dt>mechanism</dt><dd>speculative execution past an unresolved branch</dd></div><div><dt>read-out</dt><dd>FLUSH+RELOAD on a cache footprint left by the speculation</dd></div><div><dt>impact</dt><dd>read memory across a bounds/sandbox boundary (JIT, eBPF, in-process)</dd></div></dl></div></figure>
+<h2 id="speculation-leaves-a-trace-it-cant-take-back">speculation leaves a trace it can't take back<a class="headerlink" href="#speculation-leaves-a-trace-it-cant-take-back" title="Permanent link">#</a></h2>
+<p>When the CPU hits a conditional branch it hasn't resolved yet (because the
+condition's inputs aren't in cache), it <em>predicts</em> the outcome and speculatively
+executes ahead. If the prediction was wrong, it discards the architectural results —
+registers, memory writes, all rolled back. But the <strong>cache</strong> is not rolled back. A
+line pulled in during speculation stays pulled in. That gap is the whole attack.</p>
+<h2 id="the-gadget">the gadget<a class="headerlink" href="#the-gadget" title="Permanent link">#</a></h2>
+<p>The canonical victim is an ordinary, correct-looking bounds check:</p>
+<figure class="codeblock"><figcaption><span class="fname">the Spectre v1 gadget</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-spectre-v1-gadget-1">1</a></span>
+<span class="normal"><a href="#the-spectre-v1-gadget-2">2</a></span>
+<span class="normal"><a href="#the-spectre-v1-gadget-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-spectre-v1-gadget-1"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">array1_size</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">                       </span><span class="c1">// branch the CPU will mispredict</span>
+</span><span id="the-spectre-v1-gadget-2"><span class="hll"><span class="w">    </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">array2</span><span class="p">[</span><span class="w"> </span><span class="n">array1</span><span class="p">[</span><span class="n">x</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">4096</span><span class="w"> </span><span class="p">];</span><span class="w">          </span><span class="c1">// speculatively runs with evil x</span>
+</span></span><span id="the-spectre-v1-gadget-3"><span class="hll"><span class="p">}</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Run it many times with in-bounds <code class="highlight">x</code> and the branch predictor learns "taken." Now:</p>
+<figure class="codeblock"><figcaption><span class="fname">one secret byte</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#one-secret-byte-1">1</a></span>
+<span class="normal"><a href="#one-secret-byte-2">2</a></span>
+<span class="normal"><a href="#one-secret-byte-3">3</a></span>
+<span class="normal"><a href="#one-secret-byte-4">4</a></span>
+<span class="normal"><a href="#one-secret-byte-5">5</a></span>
+<span class="normal"><a href="#one-secret-byte-6">6</a></span>
+<span class="normal"><a href="#one-secret-byte-7">7</a></span>
+<span class="normal"><a href="#one-secret-byte-8">8</a></span>
+<span class="normal"><a href="#one-secret-byte-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="one-secret-byte-1">1. TRAIN  call with valid x (0..size-1) repeatedly  -&gt; predictor: &quot;branch taken&quot;
+</span><span id="one-secret-byte-2">2. FLUSH  evict array1_size (so the check resolves slowly) and all of array2
+</span><span id="one-secret-byte-3">3. ATTACK call with x = (secret_addr - array1)        -&gt; x is OUT of bounds
+</span><span id="one-secret-byte-4">          CPU speculates the branch taken:
+</span><span id="one-secret-byte-5">            reads array1[x]  = *secret_addr  = a secret byte `s`
+</span><span id="one-secret-byte-6">            reads array2[s * 4096]           -&gt; caches THAT line
+</span><span id="one-secret-byte-7">          bounds check resolves false -&gt; architectural rollback
+</span><span id="one-secret-byte-8">            ...but array2[s*4096] is still cached
+</span><span id="one-secret-byte-9">4. RELOAD time array2[k*4096] for k in 0..255; the fast k IS the secret byte s
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The <code class="highlight">* 4096</code> spreads each of the 256 possible byte values onto its own page, so the
+hardware prefetcher can't blur which line the speculation touched —
+<a href="/p/flush-reload-cache-side-channel/">FLUSH+RELOAD</a> then reads it cleanly:</p>
+<figure class="codeblock"><figcaption><span class="fname">recover the byte from array2&#x27;s footprint</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#recover-the-byte-from-array2s-footprint-1">1</a></span>
+<span class="normal"><a href="#recover-the-byte-from-array2s-footprint-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="recover-the-byte-from-array2s-footprint-1"><span class="n">times</span> <span class="o">=</span> <span class="p">[</span><span class="n">reload_time</span><span class="p">(</span><span class="n">array2</span> <span class="o">+</span> <span class="n">k</span><span class="o">*</span><span class="mi">4096</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">256</span><span class="p">)]</span>
+</span><span id="recover-the-byte-from-array2s-footprint-2"><span class="n">secret</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">256</span><span class="p">),</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">k</span><span class="p">:</span> <span class="n">times</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>     <span class="c1"># the cached (fast) index</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Walk <code class="highlight">secret_addr</code> one byte at a time and you read memory the bounds check was
+supposed to protect — out of a JS JIT sandbox, across an eBPF bounds check, or
+anywhere a trusted boundary is enforced by a branch.</p>
+<details class="spoiler">
+<summary>reading past the check, one byte at a time</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">addr 0x... : 0x73 &#39;s&#39;   addr+1 : 0x65 &#39;e&#39;   addr+2 : 0x63 &#39;c&#39; ...
+</span><span id="code-2">-&gt; &quot;secret_in_another_security_domain&quot;
+</span><span id="code-3">segfault{the_cpu_already_read_it_before_it_said_no}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="stopping-it-and-the-cost">stopping it (and the cost)<a class="headerlink" href="#stopping-it-and-the-cost" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Serialize the check.</strong> An <code class="highlight">lfence</code> between the bounds compare and the array
+  access stops speculation from running ahead — the targeted, low-overhead fix
+  compilers insert at sensitive branches.</li>
+<li><strong>Mask the index.</strong> Clamp <code class="highlight">x</code> to the array bounds with an arithmetic mask
+  (<code class="highlight">x &amp;= (size-1)</code>) so even speculatively it can't go out of range.</li>
+<li><strong>Starve the read-out.</strong> Reduced timer resolution and removing precise timers
+  (browsers did this to <code class="highlight">performance.now</code>/SharedArrayBuffer) raise the noise on the
+  FLUSH+RELOAD half.</li>
+</ul>
+<p>Spectre v1's descendants — v2's branch-target injection (answered by retpolines),
+Meltdown's fault-suppressed loads — all share this spine: a transient,
+"rolled-back" execution that nonetheless stamps the cache, read back by the
+<a href="/p/prime-probe-eviction-sets/">oracles</a> from earlier in this series. The
+uncomfortable lesson is architectural: correctness guarantees cover <em>architectural</em>
+state, and security had been quietly assuming that was all the state there is.</p></article>
+</div>
+
+<nav class="pager"><a class="prev" href="/p/prime-probe-eviction-sets/"><span class="lbl">&#8249; prev</span>Prime+Probe — a side channel with nothing shared</a></nav></main>
+
+    <footer class="status">
+      <span>58 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

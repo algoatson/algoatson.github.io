@@ -4,9 +4,9 @@
     <title>algoatson.github.io</title>
     <link>https://algoatson.github.io/</link>
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.</description>
+    <description>NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 15:29:11 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 15:55:02 +0000</lastBuildDate>
     <item>
       <title>House of Apple 2 — FSOP after the hooks died</title>
       <link>https://algoatson.github.io/p/house-of-apple-2/</link>
@@ -128,6 +128,22 @@
       <description>Part 1 of the heap series — the only internals that matter for exploitation: chunk anatomy, the size field&#x27;s flag bits, and the six places a free chunk can live (tcache, fastbins, unsorted, small, large, top). Everything later is corrupting one of these on purpose.</description>
     </item>
     <item>
+      <title>PTR_MANGLE and hijacking the exit handlers</title>
+      <link>https://algoatson.github.io/p/ptr-mangle-exit-handlers/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/ptr-mangle-exit-handlers/</guid>
+      <pubDate>Sun, 07 Jun 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>glibc</category><category>internals</category>
+      <description>glibc stores some function pointers — atexit handlers, TLS destructors, jmp_buf — mangled with a secret guard so you can&#x27;t just overwrite them with a target. Read how the mangle works, where its guard lives (fs:0x30, the canary&#x27;s neighbour), and the two moves that defeat it: leak the guard, or zero it.</description>
+    </item>
+    <item>
+      <title>reading _int_free: a source-code review of the checks</title>
+      <link>https://algoatson.github.io/p/reading-int-free-source-review/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/reading-int-free-source-review/</guid>
+      <pubDate>Sat, 06 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>glibc</category><category>internals</category>
+      <description>Every heap exploit is a negotiation with the checks in _int_free. This is a guided read of glibc&#x27;s free path — each malloc_printerr in order, what corrupted state it inspects, and exactly which attack it was added to kill. Know the gates and you know which technique survives on which libc.</description>
+    </item>
+    <item>
       <title>CET — shadow stacks, IBT, and what still works</title>
       <link>https://algoatson.github.io/p/cet-shadow-stack-ibt/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/cet-shadow-stack-ibt/</guid>
@@ -144,6 +160,14 @@
       <description>When a smallbin serves a request, glibc stashes the leftover chunks into the tcache — and that stashing does a doubly-linked-list unlink with a far weaker check than the real thing. Corrupt one bk pointer and you get a libc write and an allocation at an address you choose.</description>
     </item>
     <item>
+      <title>Dirty Pipe (CVE-2022-0847): one uninitialised flag</title>
+      <link>https://algoatson.github.io/p/dirty-pipe-cve-2022-0847/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/dirty-pipe-cve-2022-0847/</guid>
+      <pubDate>Wed, 03 Jun 2026 00:00:00 +0000</pubDate>
+      <category>kernel</category><category>pwn</category>
+      <description>A pipe buffer&#x27;s flags field was left uninitialised, so a stale PIPE_BUF_FLAG_CAN_MERGE let a write() spill into the page cache of a file you only opened read-only. No memory corruption, no ROP — just a missing assignment that turns &quot;read a file&quot; into &quot;overwrite it&quot;. A source review of one of the cleanest LPEs in years.</description>
+    </item>
+    <item>
       <title>PAC and MTE — how ARM64&#x27;s new walls fall</title>
       <link>https://algoatson.github.io/p/arm64-pac-and-mte/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/arm64-pac-and-mte/</guid>
@@ -158,6 +182,14 @@
       <pubDate>Tue, 02 Jun 2026 00:00:00 +0000</pubDate>
       <category>re</category><category>tooling</category>
       <description>The terminal reverse-engineering workflow — open, analyse, navigate, search, patch, and debug a binary without ever leaving the prompt. The commands I actually use, plus where rizin and radare2 diverge.</description>
+    </item>
+    <item>
+      <title>the setcontext gadget — one call to every register</title>
+      <link>https://algoatson.github.io/p/setcontext-register-control/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/setcontext-register-control/</guid>
+      <pubDate>Sun, 31 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category><category>internals</category>
+      <description>A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from &quot;I control one call&quot; to &quot;I control the machine&quot;.</description>
     </item>
     <item>
       <title>stack pivoting — when the overflow is too small</title>
@@ -214,38 +246,6 @@
       <pubDate>Tue, 12 May 2026 00:00:00 +0000</pubDate>
       <category>pwn</category><category>rop</category><category>tooling</category>
       <description>NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.</description>
-    </item>
-    <item>
-      <title>ret2dlresolve — a shell with no libc leak</title>
-      <link>https://algoatson.github.io/p/ret2dlresolve-no-leak/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/ret2dlresolve-no-leak/</guid>
-      <pubDate>Sun, 10 May 2026 00:00:00 +0000</pubDate>
-      <category>pwn</category><category>rop</category><category>internals</category>
-      <description>When you can&#x27;t leak libc, make the dynamic linker resolve system() for you. Forge a relocation, a symbol, and a string, point the lazy-binding machinery at them, and _dl_runtime_resolve looks up the address you couldn&#x27;t.</description>
-    </item>
-    <item>
-      <title>pwndbg muscle memory</title>
-      <link>https://algoatson.github.io/p/pwndbg-muscle-memory/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/pwndbg-muscle-memory/</guid>
-      <pubDate>Fri, 01 May 2026 00:00:00 +0000</pubDate>
-      <category>pwn</category><category>heap</category><category>notes</category>
-      <description>The gdb + pwndbg commands I actually type, grouped the way I reach for them rather than the way the docs list them. Heap inspection, the search primitives, breaking under PIE, and the three-command pre-flight before every session.</description>
-    </item>
-    <item>
-      <title>seccomp jails, and the holes in them</title>
-      <link>https://algoatson.github.io/p/seccomp-jails-and-their-holes/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/seccomp-jails-and-their-holes/</guid>
-      <pubDate>Thu, 30 Apr 2026 00:00:00 +0000</pubDate>
-      <category>pwn</category><category>seccomp</category><category>ctf</category>
-      <description>A seccomp filter that kills execve but forgets the arch check, the x32 bit, or openat is a jail with the bars painted on. Read the filter, find the gap, and turn a blacklist into open-read-write.</description>
-    </item>
-    <item>
-      <title>the first five minutes with an unknown binary</title>
-      <link>https://algoatson.github.io/p/first-five-minutes-unknown-binary/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/first-five-minutes-unknown-binary/</guid>
-      <pubDate>Wed, 22 Apr 2026 00:00:00 +0000</pubDate>
-      <category>re</category><category>tooling</category><category>linux</category>
-      <description>A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.</description>
     </item>
   </channel>
 </rss>

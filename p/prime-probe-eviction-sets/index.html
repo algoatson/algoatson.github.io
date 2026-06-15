@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>Prime+Probe — a side channel with nothing shared — algoatson.github.io</title>
+<meta name="description" content="FLUSH+RELOAD needs memory shared with the victim. Prime+Probe drops that requirement: fill a cache set with your own lines, let the victim run, and time how many of yours got evicted. You lose address-level resolution and gain the ability to spy across processes and VMs that share nothing but silicon.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/prime-probe-eviction-sets/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Prime+Probe — a side channel with nothing shared — algoatson.github.io">
+<meta property="og:description" content="FLUSH+RELOAD needs memory shared with the victim. Prime+Probe drops that requirement: fill a cache set with your own lines, let the victim run, and time how many of yours got evicted. You lose address-level resolution and gain the ability to spy across processes and VMs that share nothing but silicon.">
+<meta property="og:url" content="https://algoatson.github.io/p/prime-probe-eviction-sets/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/prime-probe-eviction-sets.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "Prime+Probe — a side channel with nothing shared", "datePublished": "2026-03-10", "dateModified": "2026-03-10", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "FLUSH+RELOAD needs memory shared with the victim. Prime+Probe drops that requirement: fill a cache set with your own lines, let the victim run, and time how many of yours got evicted. You lose address-level resolution and gain the ability to spy across processes and VMs that share nothing but silicon.", "url": "https://algoatson.github.io/p/prime-probe-eviction-sets/", "mainEntityOfPage": "https://algoatson.github.io/p/prime-probe-eviction-sets/", "keywords": "side-channel, research"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>Prime+Probe — a side channel with nothing shared</h1>
+  <div class="meta"><span>2026-03-10</span><span>3 min read</span><a class="tag" href="/tags/side-channel/">side-channel</a> <a class="tag" href="/tags/research/">research</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/microarchitectural-attacks/">microarchitectural attacks</a><span class="series__pos">part 2 / 3 · ~9 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:67%"></span></div><ol class="series__list"><li><a href="/p/flush-reload-cache-side-channel/">FLUSH+RELOAD — reading secrets through the cache</a></li><li class="cur" aria-current="true">Prime+Probe — a side channel with nothing shared</li><li><a href="/p/spectre-v1-bounds-check-bypass/">Spectre v1 — the CPU runs code it shouldn&#x27;t</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-cache-is-a-grid-of-sets">the cache is a grid of sets</a></li>
+<li><a href="#prime-wait-probe">prime, wait, probe</a></li>
+<li><a href="#the-hard-part-building-eviction-sets">the hard part: building eviction sets</a></li>
+<li><a href="#where-it-fits">where it fits</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><a href="/p/flush-reload-cache-side-channel/">FLUSH+RELOAD</a> is precise, but it has a
+prerequisite that often doesn't hold: shared memory with the victim. Across VMs on
+a cloud host, or a victim that maps nothing of yours, there's no line to <code class="highlight">clflush</code>.
+Prime+Probe removes the requirement entirely — it spies on the cache through
+<em>contention</em> rather than sharing.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>primitive</dt><dd>cache set contention (no shared memory, no clflush needed)</dd></div><div><dt>resolution</dt><dd>cache-SET granularity (coarser than FLUSH+RELOAD&#x27;s line)</dd></div><div><dt>reach</dt><dd>cross-process, cross-core (LLC), cross-VM</dd></div></dl></div></figure>
+<h2 id="the-cache-is-a-grid-of-sets">the cache is a grid of sets<a class="headerlink" href="#the-cache-is-a-grid-of-sets" title="Permanent link">#</a></h2>
+<p>A set-associative cache splits into <strong>sets</strong>; each address maps to one set, and a
+set holds <code class="highlight">W</code> lines (a <code class="highlight">W</code>-way cache). Access a set's worth of your own addresses —
+an <strong>eviction set</strong> of <code class="highlight">W</code> lines that all map to the same set — and you've filled
+it, displacing whatever was there. That's the entire lever.</p>
+<figure class="codeblock"><figcaption><span class="fname">one set, W ways</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#one-set-w-ways-1">1</a></span>
+<span class="normal"><a href="#one-set-w-ways-2">2</a></span>
+<span class="normal"><a href="#one-set-w-ways-3">3</a></span>
+<span class="normal"><a href="#one-set-w-ways-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="one-set-w-ways-1">set k:  [ way0 ][ way1 ][ way2 ] ... [ way W-1 ]
+</span><span id="one-set-w-ways-2">prime:  fill all W ways with attacker lines
+</span><span id="one-set-w-ways-3">victim: touches an address mapping to set k  -&gt;  evicts one attacker line
+</span><span id="one-set-w-ways-4">probe:  re-access the W lines; the evicted one is now a slow miss
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="prime-wait-probe">prime, wait, probe<a class="headerlink" href="#prime-wait-probe" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="fname">one measurement of set k</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#one-measurement-of-set-k-1">1</a></span>
+<span class="normal"><a href="#one-measurement-of-set-k-2">2</a></span>
+<span class="normal"><a href="#one-measurement-of-set-k-3">3</a></span>
+<span class="normal"><a href="#one-measurement-of-set-k-4">4</a></span>
+<span class="normal"><a href="#one-measurement-of-set-k-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="one-measurement-of-set-k-1">PRIME   access every line in the eviction set for set k   (fill the set)
+</span><span id="one-measurement-of-set-k-2">WAIT    let the victim execute
+</span><span id="one-measurement-of-set-k-3">PROBE   re-access the eviction set, timing each line:
+</span><span id="one-measurement-of-set-k-4">          all fast      -&gt; victim did NOT use set k
+</span><span id="one-measurement-of-set-k-5">          one+ slow     -&gt; victim evicted your line -&gt; it USED set k
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>A slow probe means the victim accessed <em>some</em> address that maps to set <code class="highlight">k</code>. You
+don't learn which address (that's the resolution you trade away versus
+FLUSH+RELOAD), but a pattern of busy sets over time is plenty to fingerprint an
+AES T-table access, an exponentiation step, or a keystroke.</p>
+<h2 id="the-hard-part-building-eviction-sets">the hard part: building eviction sets<a class="headerlink" href="#the-hard-part-building-eviction-sets" title="Permanent link">#</a></h2>
+<p>You need <code class="highlight">W</code> addresses that collide in the target set. In L1 that's easy — the set
+index comes from virtual-address bits you control. In the <strong>last-level cache</strong>,
+where cross-core spying happens, it's hard: the LLC is physically indexed and
+<strong>sliced</strong> (Intel's undocumented hash spreads addresses across slices), so you don't
+know which addresses collide. You find eviction sets <em>empirically</em>:</p>
+<ul>
+<li>allocate a large buffer (huge pages help — they fix the low physical bits);</li>
+<li>use timing to group-test addresses into colliding sets (an address belongs to a
+  candidate set if accessing the set slows its reload);</li>
+<li>prune each set down to exactly the <code class="highlight">W</code> lines that evict the target.</li>
+</ul>
+<figure class="codeblock"><figcaption><span class="fname">the shape of eviction-set discovery</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-shape-of-eviction-set-discovery-1">1</a></span>
+<span class="normal"><a href="#the-shape-of-eviction-set-discovery-2">2</a></span>
+<span class="normal"><a href="#the-shape-of-eviction-set-discovery-3">3</a></span>
+<span class="normal"><a href="#the-shape-of-eviction-set-discovery-4">4</a></span>
+<span class="normal"><a href="#the-shape-of-eviction-set-discovery-5">5</a></span>
+<span class="normal"><a href="#the-shape-of-eviction-set-discovery-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-shape-of-eviction-set-discovery-1"><span class="n">candidates</span> <span class="o">=</span> <span class="n">huge_page_buffer_lines</span><span class="p">()</span>
+</span><span id="the-shape-of-eviction-set-discovery-2"><span class="n">evset</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="the-shape-of-eviction-set-discovery-3"><span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
+</span><span id="the-shape-of-eviction-set-discovery-4">    <span class="k">if</span> <span class="n">access_then_time</span><span class="p">(</span><span class="n">evset</span> <span class="o">+</span> <span class="p">[</span><span class="n">line</span><span class="p">])</span> <span class="o">&gt;</span> <span class="n">THRESHOLD</span><span class="p">:</span>   <span class="c1"># adding it causes eviction</span>
+</span><span id="the-shape-of-eviction-set-discovery-5">        <span class="n">evset</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
+</span><span id="the-shape-of-eviction-set-discovery-6">        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">evset</span><span class="p">)</span> <span class="o">==</span> <span class="n">W</span><span class="p">:</span> <span class="k">break</span>                       <span class="c1"># W = associativity</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>a key, watched through contention alone</summary>
+<p>No shared page — just my own buffer thrashing the victim's cache set, and the
+busy/idle pattern across the T-table sets leaks the key bytes:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">set 3: BUSY  set 7: idle  set 11: BUSY ...  -&gt; AES key byte candidates
+</span><span id="code-2">segfault{i_never_touched_your_memory}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="where-it-fits">where it fits<a class="headerlink" href="#where-it-fits" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>No sharing required</strong> — the reason Prime+Probe, not FLUSH+RELOAD, is the tool
+  for cross-VM and cross-tenant cloud attacks.</li>
+<li><strong>Coarser but broader</strong> — set-level, noisier, and the eviction-set work is real,
+  but it reaches victims that share nothing mappable.</li>
+<li><strong>The substrate for bigger attacks</strong> — LLC Prime+Probe is the covert channel many
+  cross-core <a href="/p/spectre-v1-bounds-check-bypass/">Spectre</a> and Rowhammer setups
+  build on.</li>
+</ul>
+<p>The two cache attacks are a resolution/reach trade: FLUSH+RELOAD when you share a
+page and want exact lines; Prime+Probe when you share nothing and can live with
+"which set." Between them they cover almost every situation where two security
+domains land on the same cache — which, on modern hardware, is nearly all of them.</p></article>
+</div>
+
+<nav class="pager"><a class="prev" href="/p/flush-reload-cache-side-channel/"><span class="lbl">&#8249; prev</span>FLUSH+RELOAD — reading secrets through the cache</a><a class="next" href="/p/spectre-v1-bounds-check-bypass/"><span class="lbl">next &#8250;</span>Spectre v1 — the CPU runs code it shouldn&#x27;t</a></nav></main>
+
+    <footer class="status">
+      <span>58 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

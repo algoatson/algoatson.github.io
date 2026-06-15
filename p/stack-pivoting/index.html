@@ -42,7 +42,7 @@
   <h1>stack pivoting — when the overflow is too small</h1>
   <div class="meta"><span>2026-05-30</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a></div>
 </header>
-
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/return-oriented-programming/">return-oriented programming</a><span class="series__pos">part 5 / 8 · ~28 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:62%"></span></div><ol class="series__list"><li><a href="/p/ret2libc-warmup/">ret2libc on a warm-up: stack smash to shell</a></li><li><a href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a></li><li><a href="/p/ret2csu-universal-gadget/">ret2csu — the universal gadget hiding in every binary</a></li><li><a href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a></li><li class="cur" aria-current="true">stack pivoting — when the overflow is too small</li><li><a href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a></li><li><a href="/p/one-gadget-constraints/">one_gadget — a shell in a single address</a></li><li><a href="/p/setcontext-register-control/">the setcontext gadget — one call to every register</a></li></ol></aside>
 <div class="postwrap has-toc">
   <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
 <ul>
@@ -141,11 +141,11 @@ off <code class="highlight">.bss</code>:
 chain runs." Once <code class="highlight">rsp</code> points at memory you own, the size of the original
 overflow stops mattering — you have as much ROP as you can write.</p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/writeup-static-srop/">writeup: static — no libc, no leak, just SROP</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-22</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-12</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a><span class="row__min">5 min</span></div></div></section>
-<nav class="pager"><a class="prev" href="/p/rizin-radare2-in-anger/"><span class="lbl">&#8249; newer</span>rizin and radare2 in anger</a><a class="next" href="/p/pwntools-cookbook/"><span class="lbl">older &#8250;</span>a pwntools cookbook</a></nav></main>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/writeup-static-srop/">writeup: static — no libc, no leak, just SROP</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/ret2dlresolve-no-leak/"><span class="lbl">&#8249; prev</span>ret2dlresolve — a shell with no libc leak</a><a class="next" href="/p/srop-one-syscall-every-register/"><span class="lbl">next &#8250;</span>SROP — one syscall, every register</a></nav></main>
 
     <footer class="status">
-      <span>52 posts</span>
+      <span>58 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

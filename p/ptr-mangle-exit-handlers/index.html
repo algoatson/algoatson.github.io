@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>PTR_MANGLE and hijacking the exit handlers — algoatson.github.io</title>
+<meta name="description" content="glibc stores some function pointers — atexit handlers, TLS destructors, jmp_buf — mangled with a secret guard so you can&#x27;t just overwrite them with a target. Read how the mangle works, where its guard lives (fs:0x30, the canary&#x27;s neighbour), and the two moves that defeat it: leak the guard, or zero it.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/ptr-mangle-exit-handlers/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="PTR_MANGLE and hijacking the exit handlers — algoatson.github.io">
+<meta property="og:description" content="glibc stores some function pointers — atexit handlers, TLS destructors, jmp_buf — mangled with a secret guard so you can&#x27;t just overwrite them with a target. Read how the mangle works, where its guard lives (fs:0x30, the canary&#x27;s neighbour), and the two moves that defeat it: leak the guard, or zero it.">
+<meta property="og:url" content="https://algoatson.github.io/p/ptr-mangle-exit-handlers/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/ptr-mangle-exit-handlers.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "PTR_MANGLE and hijacking the exit handlers", "datePublished": "2026-06-07", "dateModified": "2026-06-07", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "glibc stores some function pointers — atexit handlers, TLS destructors, jmp_buf — mangled with a secret guard so you can't just overwrite them with a target. Read how the mangle works, where its guard lives (fs:0x30, the canary's neighbour), and the two moves that defeat it: leak the guard, or zero it.", "url": "https://algoatson.github.io/p/ptr-mangle-exit-handlers/", "mainEntityOfPage": "https://algoatson.github.io/p/ptr-mangle-exit-handlers/", "keywords": "pwn, glibc, internals"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>PTR_MANGLE and hijacking the exit handlers</h1>
+  <div class="meta"><span>2026-06-07</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a> <a class="tag" href="/tags/internals/">internals</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/breaking-mitigations/">breaking mitigations</a><span class="series__pos">part 2 / 4 · ~13 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:50%"></span></div><ol class="series__list"><li><a href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a></li><li class="cur" aria-current="true">PTR_MANGLE and hijacking the exit handlers</li><li><a href="/p/cet-shadow-stack-ibt/">CET — shadow stacks, IBT, and what still works</a></li><li><a href="/p/arm64-pac-and-mte/">PAC and MTE — how ARM64&#x27;s new walls fall</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-mangle">the mangle</a></li>
+<li><a href="#what-it-guards-and-how-exit-reaches-it">what it guards, and how exit reaches it</a></li>
+<li><a href="#move-1-leak-the-guard">move 1 — leak the guard</a></li>
+<li><a href="#move-2-zero-the-guard">move 2 — zero the guard</a></li>
+<li><a href="#where-this-sits-in-the-modern-playbook">where this sits in the modern playbook</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The <a href="/p/the-stack-canary-from-the-source/">stack canary</a> protects return
+addresses. Its less-famous sibling, <strong>pointer guard</strong>, protects a handful of
+<em>stored function pointers</em> that an attacker with a write would otherwise love:
+<code class="highlight">atexit</code> handlers, TLS destructors, the <code class="highlight">rip</code>/<code class="highlight">rsp</code> saved in a <code class="highlight">jmp_buf</code>. When
+<code class="highlight">exit()</code> walks those handlers, it <em>demangles</em> each pointer first — so overwriting
+one with <code class="highlight">&amp;system</code> produces garbage, not a call. Unless you understand the mangle.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">glibc — PTR_MANGLE / __run_exit_handlers / __call_tls_dtors</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>guard</dt><dd>__pointer_chk_guard at fs:0x30 (sibling of the canary at fs:0x28)</dd></div><div><dt>era</dt><dd>the post-2.34 world, where the malloc hooks are gone</dd></div></dl></div></figure>
+<h2 id="the-mangle">the mangle<a class="headerlink" href="#the-mangle" title="Permanent link">#</a></h2>
+<p>A guarded pointer isn't stored raw. It's XOR'd with a per-process secret and
+rotated:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>mangled</mtext><mo>&#x0003D;</mo><mrow><mi mathvariant="normal">r</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">l</mi></mrow><mo minsize="1.2em" maxsize="1.2em">(</mo><mtext>ptr</mtext><mo>&#x02295;</mo><mtext>guard</mtext><mo>&#x0002C;</mo><mtext>&#x000A0;</mtext><mn>17</mn><mo minsize="1.2em" maxsize="1.2em">)</mo></mrow></math></div>
+<p>and read back with the inverse, <code class="highlight">ptr = ror(mangled, 17) ⊕ guard</code>. On x86-64 it's
+two instructions inlined at every store/use:</p>
+<figure class="codeblock"><figcaption><span class="fname">PTR_MANGLE / PTR_DEMANGLE</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#ptr-mangle-ptr-demangle-1">1</a></span>
+<span class="normal"><a href="#ptr-mangle-ptr-demangle-2">2</a></span>
+<span class="normal"><a href="#ptr-mangle-ptr-demangle-3">3</a></span>
+<span class="normal"><a href="#ptr-mangle-ptr-demangle-4">4</a></span>
+<span class="normal"><a href="#ptr-mangle-ptr-demangle-5">5</a></span>
+<span class="normal"><a href="#ptr-mangle-ptr-demangle-6">6</a></span>
+<span class="normal"><a href="#ptr-mangle-ptr-demangle-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="ptr-mangle-ptr-demangle-1"><span class="c1">; PTR_MANGLE rax:</span>
+</span><span id="ptr-mangle-ptr-demangle-2"><span class="nf">xor</span><span class="w">  </span><span class="no">rax</span><span class="p">,</span><span class="w"> </span><span class="no">qword</span><span class="w"> </span><span class="no">ptr</span><span class="w"> </span><span class="no">fs</span><span class="p">:[</span><span class="mi">0x30</span><span class="p">]</span><span class="w">    </span><span class="c1">; mix in the secret guard</span>
+</span><span id="ptr-mangle-ptr-demangle-3"><span class="nf">rol</span><span class="w">  </span><span class="no">rax</span><span class="p">,</span><span class="w"> </span><span class="mi">0x11</span><span class="w">                   </span><span class="c1">; rotate left 17</span>
+</span><span id="ptr-mangle-ptr-demangle-4">
+</span><span id="ptr-mangle-ptr-demangle-5"><span class="c1">; PTR_DEMANGLE rax (the inverse, on the way to calling it):</span>
+</span><span id="ptr-mangle-ptr-demangle-6"><span class="nf">ror</span><span class="w">  </span><span class="no">rax</span><span class="p">,</span><span class="w"> </span><span class="mi">0x11</span>
+</span><span id="ptr-mangle-ptr-demangle-7"><span class="nf">xor</span><span class="w">  </span><span class="no">rax</span><span class="p">,</span><span class="w"> </span><span class="no">qword</span><span class="w"> </span><span class="no">ptr</span><span class="w"> </span><span class="no">fs</span><span class="p">:[</span><span class="mi">0x30</span><span class="p">]</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">__pointer_chk_guard</code> is seeded at startup from the kernel's <code class="highlight">AT_RANDOM</code> — the same
+source as the <a href="/p/the-stack-canary-from-the-source/">canary</a> — and parked in the
+TLS at <code class="highlight">fs:0x30</code>, one slot past the canary's <code class="highlight">fs:0x28</code>. Per-process, constant for
+the run, inherited across <code class="highlight">fork</code>.</p>
+<h2 id="what-it-guards-and-how-exit-reaches-it">what it guards, and how exit reaches it<a class="headerlink" href="#what-it-guards-and-how-exit-reaches-it" title="Permanent link">#</a></h2>
+<p>Two structures matter, because both are walked on a normal <code class="highlight">exit()</code>:</p>
+<ul>
+<li><strong><code class="highlight">__exit_funcs</code></strong> — the <code class="highlight">atexit</code>/<code class="highlight">__cxa_atexit</code> list. <code class="highlight">__run_exit_handlers</code>
+  demangles each <code class="highlight">exit_function</code>'s pointer and calls it.</li>
+<li><strong><code class="highlight">tls_dtor_list</code></strong> — thread-local destructors. <code class="highlight">__call_tls_dtors</code> does, per entry:</li>
+</ul>
+<figure class="codeblock"><figcaption><span class="fname">__call_tls_dtors (paraphrased)</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#-call-tls-dtors-paraphrased-1">1</a></span>
+<span class="normal"><a href="#-call-tls-dtors-paraphrased-2">2</a></span>
+<span class="normal"><a href="#-call-tls-dtors-paraphrased-3">3</a></span>
+<span class="normal"><a href="#-call-tls-dtors-paraphrased-4">4</a></span>
+<span class="normal"><a href="#-call-tls-dtors-paraphrased-5">5</a></span>
+<span class="normal"><a href="#-call-tls-dtors-paraphrased-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="-call-tls-dtors-paraphrased-1"><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">tls_dtor_list</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="-call-tls-dtors-paraphrased-2"><span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">dtor_list</span><span class="w"> </span><span class="o">*</span><span class="n">cur</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tls_dtor_list</span><span class="p">;</span>
+</span><span id="-call-tls-dtors-paraphrased-3"><span class="hll"><span class="w">    </span><span class="n">dtor_func</span><span class="w"> </span><span class="n">func</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PTR_DEMANGLE</span><span class="p">(</span><span class="n">cur</span><span class="o">-&gt;</span><span class="n">func</span><span class="p">);</span><span class="w">   </span><span class="c1">// ror 17 ; xor fs:0x30</span>
+</span></span><span id="-call-tls-dtors-paraphrased-4"><span class="hll"><span class="w">    </span><span class="n">tls_dtor_list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cur</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">;</span>
+</span></span><span id="-call-tls-dtors-paraphrased-5"><span class="w">    </span><span class="n">func</span><span class="p">(</span><span class="n">cur</span><span class="o">-&gt;</span><span class="n">obj</span><span class="p">);</span><span class="w">                              </span><span class="c1">// &lt;- our target call, obj in rdi</span>
+</span><span id="-call-tls-dtors-paraphrased-6"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>So if you can write a fake <code class="highlight">dtor_list</code> (or corrupt an existing entry), the
+demangled <code class="highlight">func</code> is called with <code class="highlight">obj</code> in <code class="highlight">rdi</code>. Point <code class="highlight">func</code> at <code class="highlight">system</code> and <code class="highlight">obj</code>
+at <code class="highlight">&quot;/bin/sh&quot;</code> and <code class="highlight">exit()</code> spawns a shell — <em>if</em> you can produce a correctly
+mangled <code class="highlight">func</code>. That's the whole problem, and there are two solutions.</p>
+<h2 id="move-1-leak-the-guard">move 1 — leak the guard<a class="headerlink" href="#move-1-leak-the-guard" title="Permanent link">#</a></h2>
+<p>The guard isn't a moving target; it's one value. Leak <code class="highlight">__pointer_chk_guard</code> from
+the TLS directly, or recover it from any <em>already-mangled</em> pointer whose plaintext
+you know (a default libc handler, say): since <code class="highlight">ptr = ror(mangled,17) ⊕ guard</code>,</p>
+<figure class="codeblock"><figcaption><span class="fname">recover the guard from a known mangled pointer</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#recover-the-guard-from-a-known-mangled-pointer-1">1</a></span>
+<span class="normal"><a href="#recover-the-guard-from-a-known-mangled-pointer-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="recover-the-guard-from-a-known-mangled-pointer-1"><span class="n">guard</span> <span class="o">=</span> <span class="n">ror</span><span class="p">(</span><span class="n">leaked_mangled</span><span class="p">,</span> <span class="mi">17</span><span class="p">)</span> <span class="o">^</span> <span class="n">known_plaintext_ptr</span>
+</span><span id="recover-the-guard-from-a-known-mangled-pointer-2"><span class="n">mangled_system</span> <span class="o">=</span> <span class="n">rol</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">]</span> <span class="o">^</span> <span class="n">guard</span><span class="p">,</span> <span class="mi">17</span><span class="p">)</span>   <span class="c1"># forge any pointer now</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>With the guard in hand you can mangle <em>any</em> target, and the demangle on the exit
+path turns it straight back into your call.</p>
+<h2 id="move-2-zero-the-guard">move 2 — zero the guard<a class="headerlink" href="#move-2-zero-the-guard" title="Permanent link">#</a></h2>
+<p>If you have an arbitrary write but no leak, don't fight the secret — delete it.
+Overwrite the TLS slot at <code class="highlight">fs:0x30</code> with <code class="highlight">0</code>. Now <code class="highlight">ptr ⊕ 0 = ptr</code>, so mangling
+collapses to a plain rotate you can compute with no secret at all:</p>
+<figure class="codeblock"><figcaption><span class="fname">guard = 0 -&gt; mangling is just a rotate</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#guard-0---mangling-is-just-a-rotate-1">1</a></span>
+<span class="normal"><a href="#guard-0---mangling-is-just-a-rotate-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="guard-0---mangling-is-just-a-rotate-1"><span class="n">write</span><span class="p">(</span><span class="n">tls_base</span> <span class="o">+</span> <span class="mh">0x30</span><span class="p">,</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>            <span class="c1"># neutralise the guard</span>
+</span><span id="guard-0---mangling-is-just-a-rotate-2"><span class="n">mangled_system</span> <span class="o">=</span> <span class="n">rol</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">],</span> <span class="mi">17</span><span class="p">)</span>   <span class="c1"># no leak needed</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>This is the exact analogue of overwriting the canary's master copy — once the
+secret is zero, the protection is a fixed, public transform.</p>
+<details class="spoiler">
+<summary>exit() ran my handler</summary>
+<p>A forged <code class="highlight">tls_dtor_list</code> entry, a mangled <code class="highlight">system</code>, <code class="highlight">obj = &quot;/bin/sh&quot;</code>, and the
+program's own clean-up did the call:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{exit_handlers_are_function_pointers_too}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="where-this-sits-in-the-modern-playbook">where this sits in the modern playbook<a class="headerlink" href="#where-this-sits-in-the-modern-playbook" title="Permanent link">#</a></h2>
+<p>With <code class="highlight">__free_hook</code>/<code class="highlight">__malloc_hook</code> gone since 2.34, the targets that <em>survive</em> are
+the ones glibc still calls on the way out — exit handlers, TLS destructors — and
+those are guarded by PTR_MANGLE precisely to make this attack harder. It raises the
+bar to "leak or zero one TLS qword," the same bar the canary sets. Know where the
+guard lives and how the rotate works, and a mangled pointer stops being a wall: it's
+a fixed function of a single secret you can read or erase.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/the-stack-canary-from-the-source/"><span class="lbl">&#8249; prev</span>the stack canary, from the source</a><a class="next" href="/p/cet-shadow-stack-ibt/"><span class="lbl">next &#8250;</span>CET — shadow stacks, IBT, and what still works</a></nav></main>
+
+    <footer class="status">
+      <span>58 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
