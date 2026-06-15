@@ -4,9 +4,9 @@
     <title>algoatson.github.io</title>
     <link>https://algoatson.github.io/</link>
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>The data-only path overwrites modprobe_path; the code path hijacks kernel control flow to run commit_creds(prepare_kernel_cred(0)) and returns to a root shell. Here&#x27;s that path, and the four mitigations — SMEP, SMAP, KPTI, KASLR — you step over to walk it.</description>
+    <description>A UAF that needs you to reallocate in a microsecond window is a coin flip — unless you can pause the kernel mid-copy. userfaultfd (and FUSE, when it&#x27;s locked down) let a page fault block in your own handler, stretching a hopeless race into a step you control.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 15:04:12 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 15:25:34 +0000</lastBuildDate>
     <item>
       <title>House of Apple 2 — FSOP after the hooks died</title>
       <link>https://algoatson.github.io/p/house-of-apple-2/</link>
@@ -192,6 +192,14 @@
       <description>A small workflow I paste into every CTF box — pull every binary&#x27;s mitigations into one scannable list, run it from a single keybind, and stop re-typing checksec for the hundredth time. Glue, not genius.</description>
     </item>
     <item>
+      <title>writeup: notekeeper — a UAF from menu to shell</title>
+      <link>https://algoatson.github.io/p/writeup-notekeeper-uaf/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/writeup-notekeeper-uaf/</guid>
+      <pubDate>Mon, 18 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>heap</category><category>ctf</category>
+      <description>A textbook menu-driven heap challenge, start to finish. A dangling pointer after delete gives a read and a write on freed memory; the unsorted bin leaks libc, tcache poisoning aims a freed chunk at __free_hook, and the program frees its way into a shell.</description>
+    </item>
+    <item>
       <title>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</title>
       <link>https://algoatson.github.io/p/finding-gadgets/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/finding-gadgets/</guid>
@@ -238,14 +246,6 @@
       <pubDate>Mon, 20 Apr 2026 00:00:00 +0000</pubDate>
       <category>kernel</category><category>pwn</category>
       <description>A UAF that needs you to reallocate in a microsecond window is a coin flip — unless you can pause the kernel mid-copy. userfaultfd (and FUSE, when it&#x27;s locked down) let a page fault block in your own handler, stretching a hopeless race into a step you control.</description>
-    </item>
-    <item>
-      <title>kernel LPE — commit_creds(prepare_kernel_cred(0))</title>
-      <link>https://algoatson.github.io/p/kernel-lpe-commit-creds/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/kernel-lpe-commit-creds/</guid>
-      <pubDate>Sun, 12 Apr 2026 00:00:00 +0000</pubDate>
-      <category>kernel</category><category>pwn</category>
-      <description>The data-only path overwrites modprobe_path; the code path hijacks kernel control flow to run commit_creds(prepare_kernel_cred(0)) and returns to a root shell. Here&#x27;s that path, and the four mitigations — SMEP, SMAP, KPTI, KASLR — you step over to walk it.</description>
     </item>
   </channel>
 </rss>

