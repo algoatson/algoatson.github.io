@@ -2,8 +2,6 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://algoatson.github.io/</loc><lastmod>2026-06-14</lastmod></url>
   <url><loc>https://algoatson.github.io/page/2/</loc></url>
-  <url><loc>https://algoatson.github.io/page/3/</loc></url>
-  <url><loc>https://algoatson.github.io/page/4/</loc></url>
   <url><loc>https://algoatson.github.io/p/house-of-spirit/</loc><lastmod>2026-06-14</lastmod></url>
   <url><loc>https://algoatson.github.io/p/poison-null-byte/</loc><lastmod>2026-06-14</lastmod></url>
   <url><loc>https://algoatson.github.io/p/tcache-dup/</loc><lastmod>2026-06-14</lastmod></url>
@@ -53,4 +51,6 @@
   <url><loc>https://algoatson.github.io/tags/obfuscation/</loc></url>
   <url><loc>https://algoatson.github.io/tags/site/</loc></url>
   <url><loc>https://algoatson.github.io/tags/rev/</loc></url>
+  <url><loc>https://algoatson.github.io/series/</loc></url>
+  <url><loc>https://algoatson.github.io/series/glibc-heap-exploitation/</loc></url>
 </urlset>

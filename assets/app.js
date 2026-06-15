@@ -414,7 +414,11 @@
       }
       case 'Enter': {
         const rows = getRows();
-        if (rows.length && ri >= 0) { e.preventDefault(); rows[ri].click(); }
+        if (rows.length && ri >= 0) {
+          e.preventDefault();
+          // rows are <div>s now; follow the stretched title link
+          (rows[ri].querySelector('.row__title') || rows[ri]).click();
+        }
         break;
       }
       case 't': applyMode(root.dataset.mode === 'light' ? 'dark' : 'light'); break;
