@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>House of Apple 2 — FSOP after the hooks died — algoatson.github.io</title>
+<meta name="description" content="glibc 2.34 deleted __free_hook and __malloc_hook, and everyone&#x27;s muscle memory broke. The modern answer is to forge a FILE — but the vtable is validated now. House of Apple 2 slips past that check by abusing a legitimate vtable that dereferences a second, unchecked one.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/house-of-apple-2/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="House of Apple 2 — FSOP after the hooks died — algoatson.github.io">
+<meta property="og:description" content="glibc 2.34 deleted __free_hook and __malloc_hook, and everyone&#x27;s muscle memory broke. The modern answer is to forge a FILE — but the vtable is validated now. House of Apple 2 slips past that check by abusing a legitimate vtable that dereferences a second, unchecked one.">
+<meta property="og:url" content="https://algoatson.github.io/p/house-of-apple-2/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/house-of-apple-2.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "House of Apple 2 — FSOP after the hooks died", "datePublished": "2026-06-15", "dateModified": "2026-06-15", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "glibc 2.34 deleted __free_hook and __malloc_hook, and everyone's muscle memory broke. The modern answer is to forge a FILE — but the vtable is validated now. House of Apple 2 slips past that check by abusing a legitimate vtable that dereferences a second, unchecked one.", "url": "https://algoatson.github.io/p/house-of-apple-2/", "mainEntityOfPage": "https://algoatson.github.io/p/house-of-apple-2/", "keywords": "heap, pwn, glibc, fsop"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>House of Apple 2 — FSOP after the hooks died</h1>
+  <div class="meta"><span>2026-06-15</span><span>4 min read</span><a class="tag" href="/tags/heap/">heap</a> <a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a> <a class="tag" href="/tags/fsop/">fsop</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#why-you-cant-just-fake-a-vtable">why you can't just fake a vtable</a></li>
+<li><a href="#the-trick-a-legit-vtable-that-derefs-an-unchecked-one">the trick: a legit vtable that derefs an unchecked one</a></li>
+<li><a href="#the-forged-file">the forged FILE</a></li>
+<li><a href="#why-this-one-stuck">why this one stuck</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>For years the endgame of a glibc heap exploit was the same: get an arbitrary
+write, set <code class="highlight">__free_hook = system</code>, free a chunk holding <code class="highlight">&quot;/bin/sh&quot;</code>. Then <strong>glibc
+2.34 removed the hooks</strong> — <code class="highlight">__free_hook</code>, <code class="highlight">__malloc_hook</code>, <code class="highlight">__realloc_hook</code>, all
+gone. A decade of muscle memory stopped working overnight.</p>
+<p>The replacement is <strong>FSOP</strong> — File Stream Oriented Programming — forging the
+<code class="highlight">_IO_FILE</code> structures glibc walks on exit. This is where <a href="/p/the-house-of-orange/">the House of
+Orange</a> was always pointing; House of Apple 2 is the
+version that still works on a modern libc.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./apple</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.35 (&gt;= 2.34, hooks removed)</dd></div><div><dt>technique</dt><dd>forge _IO_FILE -&gt; _IO_wfile_jumps -&gt; unchecked _wide_vtable -&gt; system</dd></div><div><dt>needs</dt><dd>one arbitrary write (or a controlled FILE) + a libc leak</dd></div></dl></div></figure>
+<h2 id="why-you-cant-just-fake-a-vtable">why you can't just fake a vtable<a class="headerlink" href="#why-you-cant-just-fake-a-vtable" title="Permanent link">#</a></h2>
+<p>On <code class="highlight">exit()</code>, glibc flushes every open stream. The walk is fixed and reachable:</p>
+<figure class="codeblock"><figcaption><span class="fname">the trigger path</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-trigger-path-1">1</a></span>
+<span class="normal"><a href="#the-trigger-path-2">2</a></span>
+<span class="normal"><a href="#the-trigger-path-3">3</a></span>
+<span class="normal"><a href="#the-trigger-path-4">4</a></span>
+<span class="normal"><a href="#the-trigger-path-5">5</a></span>
+<span class="normal"><a href="#the-trigger-path-6">6</a></span>
+<span class="normal"><a href="#the-trigger-path-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-trigger-path-1">exit()
+</span><span id="the-trigger-path-2">└ __run_exit_handlers
+</span><span id="the-trigger-path-3">  └ _IO_cleanup
+</span><span id="the-trigger-path-4">    └ _IO_flush_all_lockp
+</span><span id="the-trigger-path-5">      └ for fp in _IO_list_all (chained by fp-&gt;_chain):
+</span><span id="the-trigger-path-6">          if fp-&gt;_IO_write_ptr &gt; fp-&gt;_IO_write_base:     # &quot;has data to flush&quot;
+</span><span id="the-trigger-path-7">            _IO_OVERFLOW(fp, EOF)                         # fp-&gt;vtable-&gt;__overflow(fp, EOF)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The naive attack — point <code class="highlight">fp-&gt;vtable</code> at a table you control — has been dead
+since <strong>2.24</strong>. <code class="highlight">_IO_OVERFLOW</code> runs <code class="highlight">_IO_vtable_check</code>, which aborts unless the
+vtable pointer lies inside the read-only <code class="highlight">__libc_IO_vtables</code> section. A fake table
+on the heap fails instantly:</p>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">Fatal error: glibc detected an invalid stdio handle
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-trick-a-legit-vtable-that-derefs-an-unchecked-one">the trick: a legit vtable that derefs an unchecked one<a class="headerlink" href="#the-trick-a-legit-vtable-that-derefs-an-unchecked-one" title="Permanent link">#</a></h2>
+<p>You can only point <code class="highlight">vtable</code> at a <em>real</em> table in <code class="highlight">__libc_IO_vtables</code>. So pick one
+whose code does your dirty work for you: <strong><code class="highlight">_IO_wfile_jumps</code></strong>. It's legitimate,
+so the check passes — but its <code class="highlight">__overflow</code> slot is <code class="highlight">_IO_wfile_overflow</code>, which
+operates on the FILE's <strong>wide</strong> half and calls through a <em>second</em> vtable that
+glibc <strong>never validates</strong>:</p>
+<figure class="codeblock"><figcaption><span class="fname">inside the legit path</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#inside-the-legit-path-1">1</a></span>
+<span class="normal"><a href="#inside-the-legit-path-2">2</a></span>
+<span class="normal"><a href="#inside-the-legit-path-3">3</a></span>
+<span class="normal"><a href="#inside-the-legit-path-4">4</a></span>
+<span class="normal"><a href="#inside-the-legit-path-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="inside-the-legit-path-1">_IO_wfile_overflow(fp, c)
+</span><span id="inside-the-legit-path-2">└ if !(fp-&gt;_flags &amp; _IO_NO_WRITES) and the wide buffer is unset:
+</span><span id="inside-the-legit-path-3">    _IO_wdoallocbuf(fp)
+</span><span id="inside-the-legit-path-4">    └ _IO_WDOALLOCATE(fp)
+</span><span id="inside-the-legit-path-5">        = fp-&gt;_wide_data-&gt;_wide_vtable-&gt;__doallocate(fp)   # &lt;- not vtable-checked
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">fp-&gt;_wide_data</code> and its <code class="highlight">_wide_vtable</code> are just pointers in the FILE struct —
+both attacker-controlled. Point <code class="highlight">_wide_vtable-&gt;__doallocate</code> at <code class="highlight">system</code>, and
+since the call passes <code class="highlight">fp</code> as the argument, arrange the <strong>start of <code class="highlight">fp</code></strong> to be a
+shell string. One catch from the source: <code class="highlight">_flags</code> is offset 0, and
+<code class="highlight">_IO_wfile_overflow</code> bails if <code class="highlight">_flags &amp; _IO_NO_WRITES</code> (<code class="highlight">0x8</code>). The classic dodge
+is to lead the command with spaces — <code class="highlight">system(&quot;  sh&quot;)</code> runs fine and the low byte
+avoids the forbidden bit.</p>
+<h2 id="the-forged-file">the forged FILE<a class="headerlink" href="#the-forged-file" title="Permanent link">#</a></h2>
+<p>Schematic — exact offsets shift per libc version, so resolve them against your
+target's struct, don't hardcode mine:</p>
+<figure class="codeblock hexdump"><figcaption><span class="fname">fake _IO_FILE (the fields that matter)</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  <mark>20</mark> <mark>20</mark> <mark>20</mark> <mark>20</mark> <mark>73</mark> <mark>68</mark> <mark>00</mark> <mark>00</mark>  00 00 00 00 00 00 00 00  <span class="asc">|<mark> </mark><mark> </mark><mark> </mark><mark> </mark><mark>s</mark><mark>h</mark><mark>.</mark><mark>.</mark>........|</span>
+<span class="off">00000010</span>  fa 0e 01 00 00 00 00 00  00 00 00 00 00 00 00 00  <span class="asc">|................|</span>
+<span class="off">00000020</span>  00 00 ee ba                                       <span class="asc">|....            |</span></pre></div></figure>
+<p>The fields you must set, by name:</p>
+<ul>
+<li><code class="highlight">_flags</code> → a shell string whose first byte isn't caught by <code class="highlight">_IO_NO_WRITES</code>
+  (<code class="highlight">&quot;  sh&quot;</code> / <code class="highlight">&quot;  /bin/sh&quot;</code> style);</li>
+<li><code class="highlight">_IO_write_ptr &gt; _IO_write_base</code> → so the flush loop decides this stream has
+  data and calls <code class="highlight">_IO_OVERFLOW</code> at all;</li>
+<li><code class="highlight">vtable</code> → <code class="highlight">&amp;_IO_wfile_jumps</code> (real → passes <code class="highlight">_IO_vtable_check</code>);</li>
+<li><code class="highlight">_wide_data</code> → a controlled address <code class="highlight">W</code>;</li>
+<li><code class="highlight">W-&gt;_IO_buf_base = 0</code> (and write base unset) → forces <code class="highlight">_IO_wdoallocbuf</code> down the
+  <code class="highlight">_IO_WDOALLOCATE</code> branch;</li>
+<li><code class="highlight">W-&gt;_wide_vtable</code> → a controlled address <code class="highlight">V</code>, with <code class="highlight">V-&gt;__doallocate = &amp;system</code>.</li>
+</ul>
+<p>Then fire the walk. Either overwrite <code class="highlight">_IO_list_all</code> to point at your fake FILE
+(House of Orange style), or corrupt an existing stream's <code class="highlight">vtable</code>/<code class="highlight">_wide_data</code> in
+place, and let <code class="highlight">exit()</code> — or any <code class="highlight">abort</code>/<code class="highlight">__malloc_assert</code> path, which also flush
+— do the call:</p>
+<figure class="codeblock"><figcaption><span class="fname">apple.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#applepy-1"> 1</a></span>
+<span class="normal"><a href="#applepy-2"> 2</a></span>
+<span class="normal"><a href="#applepy-3"> 3</a></span>
+<span class="normal"><a href="#applepy-4"> 4</a></span>
+<span class="normal"><a href="#applepy-5"> 5</a></span>
+<span class="normal"><a href="#applepy-6"> 6</a></span>
+<span class="normal"><a href="#applepy-7"> 7</a></span>
+<span class="normal"><a href="#applepy-8"> 8</a></span>
+<span class="normal"><a href="#applepy-9"> 9</a></span>
+<span class="normal"><a href="#applepy-10">10</a></span>
+<span class="normal"><a href="#applepy-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="applepy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="applepy-2"><span class="n">libc</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./libc.so.6&quot;</span><span class="p">)</span>
+</span><span id="applepy-3"><span class="n">base</span> <span class="o">=</span> <span class="n">leak_libc</span><span class="p">()</span>                       <span class="c1"># FSOP needs a libc leak for system + vtables</span>
+</span><span id="applepy-4">
+</span><span id="applepy-5"><span class="n">fp</span>  <span class="o">=</span> <span class="n">build_fake_file</span><span class="p">(</span>
+</span><span id="applepy-6">    <span class="n">flags</span>       <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;  sh</span><span class="se">\x00\x00\x00\x00</span><span class="s2">&quot;</span><span class="p">,</span>
+</span><span id="applepy-7">    <span class="n">vtable</span>      <span class="o">=</span> <span class="n">base</span> <span class="o">+</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;_IO_wfile_jumps&quot;</span><span class="p">],</span>
+</span><span id="applepy-8">    <span class="n">wide_data</span>   <span class="o">=</span> <span class="n">W</span><span class="p">,</span>                     <span class="c1"># W-&gt;_wide_vtable = V ; V-&gt;__doallocate = system</span>
+</span><span id="applepy-9"><span class="hll"><span class="p">)</span>
+</span></span><span id="applepy-10"><span class="hll"><span class="n">write_where</span><span class="p">(</span><span class="n">libc_io_list_all</span><span class="p">,</span> <span class="n">addr_of</span><span class="p">(</span><span class="n">fp</span><span class="p">))</span>   <span class="c1"># arbitrary write -&gt; _IO_list_all = &amp;fp</span>
+</span></span><span id="applepy-11"><span class="hll"><span class="n">trigger_exit</span><span class="p">()</span>                               <span class="c1"># _IO_flush_all -&gt; system(&quot;  sh&quot;)</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the shell</summary>
+<p><code class="highlight">_IO_flush_all</code> walks to your FILE, <code class="highlight">_IO_wfile_overflow</code> dereferences the wide
+vtable you own, and calls <code class="highlight">system</code> with a pointer to the command at the head of
+the struct:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-5-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-5-1">segfault{th3_h00ks_ar3_d34d_l0ng_l1v3_FSOP}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="why-this-one-stuck">why this one stuck<a class="headerlink" href="#why-this-one-stuck" title="Permanent link">#</a></h2>
+<ul>
+<li>it needs only a <strong>single arbitrary write</strong> (to <code class="highlight">_IO_list_all</code>, or to one
+  field of a live FILE) plus a libc leak — no hooks, no specific allocator state;</li>
+<li>it survives the <strong>vtable check</strong> by never pointing <code class="highlight">vtable</code> anywhere illegal —
+  the <em>second</em> vtable does the work, and nobody validates that one;</li>
+<li>the trigger is <strong><code class="highlight">exit()</code></strong>, which almost every program reaches, and the
+  <code class="highlight">abort</code>/assert paths flush too, so even a crash can fire it.</li>
+</ul>
+<p>The hooks are gone for good, but the FILE struct is a forest of function pointers
+glibc walks on the way out. House of Apple 2 is the cleanest path through it — and
+the reason "arbitrary write + libc leak" is still, on a 2.35 libc, usually game
+over.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/tcache-dup/">tcache dup</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><span></span><a class="next" href="/p/house-of-spirit/"><span class="lbl">older &#8250;</span>the House of Spirit</a></nav></main>
+
+    <footer class="status">
+      <span>32 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

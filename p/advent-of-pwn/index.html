@@ -85,7 +85,7 @@ bookkeeping. Apply every tiny change exactly and confirm the final list matches
 perfectly. Check it once, check it twice; Santa does not tolerate even a single
 incorrect byte.</p>
 </blockquote>
-<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">check-list</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>x86-64</dd></div><div><dt>input</dt><dd>read(0, [rbp-0x400], 0x400)</dd></div><div><dt>scheme</dt><dd>per-byte add/sub, then a wall of cmp</dd></div></dl></div></figure>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">check-list</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>x86-64</dd></div><div><dt>input</dt><dd>read(0, [rbp-0x400], 0x400)</dd></div><div><dt>scheme</dt><dd>per-byte add/sub, then a wall of cmp</dd></div></dl></div></figure>
 <p>The whole binary is one straight-line function: read <code class="highlight">0x400</code> bytes onto the
 stack, mutate them in place with a long run of <code class="highlight">add</code>/<code class="highlight">sub</code>, then gate the flag
 behind an equally long run of <code class="highlight">cmp … / jne fail</code>. No loops, no key, no entropy —
@@ -273,11 +273,11 @@ and <code class="highlight">elf(5)</code>.</p>
 the <code class="highlight">SEE ALSO</code> list is the entire hint sheet.</p>
 </div></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-01-29</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2libc-warmup/">ret2libc on a warm-up: stack smash to shell</a><span class="row__min">4 min</span></div></div></section>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-04-30</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/seccomp-jails-and-their-holes/">seccomp jails, and the holes in them</a><span class="row__min">3 min</span></div></div></section>
 <nav class="pager"><a class="prev" href="/p/this-site-is-a-folder-of-text-files/"><span class="lbl">&#8249; newer</span>this site is a folder of text files</a></nav></main>
 
     <footer class="status">
-      <span>28 posts</span>
+      <span>32 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

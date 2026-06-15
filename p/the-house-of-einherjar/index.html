@@ -57,7 +57,7 @@ adjacent chunks. The House of Einherjar takes the same null byte and aims it acr
 the whole address space: clear a chunk's <code class="highlight">PREV_INUSE</code>, lie about how far back the
 "previous chunk" starts, and <code class="highlight">free</code> will consolidate backward into a <strong>fake chunk
 you control</strong> — wherever you put it.</p>
-<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./einherjar</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>off-by-one NULL + forged prev_size -&gt; backward consolidate into a fake chunk</dd></div><div><dt>needs</dt><dd>a heap leak (to measure the distance to your fake chunk)</dd></div></dl></div></figure>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./einherjar</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>off-by-one NULL + forged prev_size -&gt; backward consolidate into a fake chunk</dd></div><div><dt>needs</dt><dd>a heap leak (to measure the distance to your fake chunk)</dd></div></dl></div></figure>
 <h2 id="the-lever-prev_size-a-cleared-prev_inuse">the lever: prev_size + a cleared PREV_INUSE<a class="headerlink" href="#the-lever-prev_size-a-cleared-prev_inuse" title="Permanent link">#</a></h2>
 <p>When <code class="highlight">free(B)</code> runs and <code class="highlight">B</code>'s <code class="highlight">PREV_INUSE</code> is <strong>clear</strong>, glibc believes the chunk
 before <code class="highlight">B</code> is free and consolidates backward. It finds that previous chunk by
@@ -125,11 +125,11 @@ radius is the whole address space. Next, the doubly-linked smallbins give the sa
 "allocate anywhere" power without the null byte — <a href="/p/the-house-of-lore/">the House of
 Lore</a>.</p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
 <nav class="pager"><a class="prev" href="/p/tcache-dup/"><span class="lbl">&#8249; prev</span>tcache dup</a><a class="next" href="/p/the-house-of-lore/"><span class="lbl">next &#8250;</span>the House of Lore</a></nav></main>
 
     <footer class="status">
-      <span>28 posts</span>
+      <span>32 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

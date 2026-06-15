@@ -363,11 +363,12 @@ a.row__tag:hover { text-decoration: underline; }
   display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   font-size: 13px; line-height: 1.5;
 }
+.target__grid--solo { grid-template-columns: 1fr; }   /* facts-only: use full width */
 .target__facts, .target__mits { padding: 11px 16px; margin: 0; }
-.target__mits { border-left: 1px solid var(--line); }   /* split-view divider */
+.target__facts + .target__mits { border-left: 1px solid var(--line); }  /* split-view divider */
 @media (max-width: 600px) {
   .target__grid { grid-template-columns: 1fr; }
-  .target__mits { border-left: 0; border-top: 1px solid var(--line); }
+  .target__facts + .target__mits { border-left: 0; border-top: 1px solid var(--line); }
 }
 /* facts: aligned key / value */
 .target__facts > div { display: flex; gap: 12px; padding: 2.5px 0; }

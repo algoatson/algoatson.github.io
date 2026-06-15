@@ -50,7 +50,7 @@ whole releases, had <em>none</em> — <code class="highlight">free</code> a chun
 the tcache twice. glibc 2.29 finally added a guard, and it's a single field sitting
 in the freed chunk's own data, which means you can erase it. This is the most
 common double-free you'll actually use.</p>
-<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./tdup</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.31</dd></div><div><dt>technique</dt><dd>tcache double-free -&gt; duplicate chunk -&gt; tcache poisoning</dd></div><div><dt>guard</dt><dd>the 2.29 `key` field (and how to clear it)</dd></div></dl></div></figure>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./tdup</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.31</dd></div><div><dt>technique</dt><dd>tcache double-free -&gt; duplicate chunk -&gt; tcache poisoning</dd></div><div><dt>guard</dt><dd>the 2.29 `key` field (and how to clear it)</dd></div></dl></div></figure>
 <h2 id="227228-just-free-it-twice">2.27–2.28: just free it twice<a class="headerlink" href="#227228-just-free-it-twice" title="Permanent link">#</a></h2>
 <p>On the first two tcache releases there is nothing to bypass:</p>
 <figure class="codeblock"><figcaption><span class="fname">the whole attack, pre-2.29</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-whole-attack-pre-229-1">1</a></span>
@@ -119,11 +119,11 @@ poison. Next we go back to the classics with a twist — <a href="/p/the-house-o
 Einherjar</a>, where one null byte lets you consolidate a
 chunk backward into a fake chunk <em>anywhere</em>.</p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
 <nav class="pager"><a class="prev" href="/p/the-house-of-orange/"><span class="lbl">&#8249; prev</span>the House of Orange</a><a class="next" href="/p/the-house-of-einherjar/"><span class="lbl">next &#8250;</span>the House of Einherjar</a></nav></main>
 
     <footer class="status">
-      <span>28 posts</span>
+      <span>32 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

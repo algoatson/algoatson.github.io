@@ -50,7 +50,7 @@ moment <code class="highlight">malloc</code> needs a non-fast chunk, <code class
 fastbin array into the unsorted bin — trusting each chunk's size on the way. The
 House of Rabbit forges one of those sizes to be enormous, so the sweep produces a
 <strong>giant free chunk</strong> sitting on top of memory that's still in use.</p>
-<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./rabbit</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>forge fastbin chunk size -&gt; malloc_consolidate -&gt; giant overlapping chunk</dd></div><div><dt>needs</dt><dd>edit one freed fastbin chunk + a way to trigger consolidation</dd></div></dl></div></figure>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./rabbit</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>forge fastbin chunk size -&gt; malloc_consolidate -&gt; giant overlapping chunk</dd></div><div><dt>needs</dt><dd>edit one freed fastbin chunk + a way to trigger consolidation</dd></div></dl></div></figure>
 <h2 id="the-sweep-that-trusts-your-size">the sweep that trusts your size<a class="headerlink" href="#the-sweep-that-trusts-your-size" title="Permanent link">#</a></h2>
 <p><code class="highlight">malloc_consolidate</code> runs when a request can't be served from the fastbins/tcache
 and <code class="highlight">have_fastchunks</code> is set — in practice, <strong>allocating a larger chunk</strong> triggers
@@ -106,11 +106,11 @@ is wrong, which at least makes it easy to debug.</p>
 Corrosion</a>, which builds a libc leak and a shell out of
 nothing, no info-leak bug required.</p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
 <nav class="pager"><a class="prev" href="/p/the-house-of-lore/"><span class="lbl">&#8249; prev</span>the House of Lore</a><a class="next" href="/p/the-house-of-corrosion/"><span class="lbl">next &#8250;</span>the House of Corrosion</a></nav></main>
 
     <footer class="status">
-      <span>28 posts</span>
+      <span>32 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

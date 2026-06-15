@@ -4,9 +4,17 @@
     <title>algoatson.github.io</title>
     <link>https://algoatson.github.io/</link>
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>A December advent calendar of pwn and reversing challenges — one door a day, full solves folded behind spoilers. Day 1 byte-diffs Santa&#x27;s naughty-or-nice list; day 2 coaxes a holiday daemon into dumping coal.</description>
+    <description>a from-scratch walk through the most reliable beginner heap primitive — what the tcache is, why poisoning works, and how safe-linking changed the recipe. Educational target, not a real CVE.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 07:05:32 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 14:12:35 +0000</lastBuildDate>
+    <item>
+      <title>House of Apple 2 — FSOP after the hooks died</title>
+      <link>https://algoatson.github.io/p/house-of-apple-2/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/house-of-apple-2/</guid>
+      <pubDate>Mon, 15 Jun 2026 00:00:00 +0000</pubDate>
+      <category>heap</category><category>pwn</category><category>glibc</category><category>fsop</category>
+      <description>glibc 2.34 deleted __free_hook and __malloc_hook, and everyone&#x27;s muscle memory broke. The modern answer is to forge a FILE — but the vtable is validated now. House of Apple 2 slips past that check by abusing a legitimate vtable that dereferences a second, unchecked one.</description>
+    </item>
     <item>
       <title>the House of Spirit</title>
       <link>https://algoatson.github.io/p/house-of-spirit/</link>
@@ -160,6 +168,14 @@
       <description>The gdb + pwndbg commands I actually type, grouped the way I reach for them rather than the way the docs list them. Heap inspection, the search primitives, breaking under PIE, and the three-command pre-flight before every session.</description>
     </item>
     <item>
+      <title>seccomp jails, and the holes in them</title>
+      <link>https://algoatson.github.io/p/seccomp-jails-and-their-holes/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/seccomp-jails-and-their-holes/</guid>
+      <pubDate>Thu, 30 Apr 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>seccomp</category><category>ctf</category>
+      <description>A seccomp filter that kills execve but forgets the arch check, the x32 bit, or openat is a jail with the bars painted on. Read the filter, find the gap, and turn a blacklist into open-read-write.</description>
+    </item>
+    <item>
       <title>the first five minutes with an unknown binary</title>
       <link>https://algoatson.github.io/p/first-five-minutes-unknown-binary/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/first-five-minutes-unknown-binary/</guid>
@@ -182,6 +198,22 @@
       <pubDate>Sun, 22 Mar 2026 00:00:00 +0000</pubDate>
       <category>crypto</category><category>ctf</category><category>math</category>
       <description>The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.</description>
+    </item>
+    <item>
+      <title>the stack canary, from the source</title>
+      <link>https://algoatson.github.io/p/the-stack-canary-from-the-source/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/the-stack-canary-from-the-source/</guid>
+      <pubDate>Sun, 15 Mar 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>glibc</category><category>internals</category>
+      <description>Follow one random value from the kernel&#x27;s AT_RANDOM, through glibc startup, into fs:0x28, and out to every function prologue. Reading the source explains the canary&#x27;s quirks — the null low byte, the per-process (not per-call) value — and each quirk is a bypass.</description>
+    </item>
+    <item>
+      <title>printf is a write primitive</title>
+      <link>https://algoatson.github.io/p/printf-is-a-write-primitive/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/printf-is-a-write-primitive/</guid>
+      <pubDate>Sun, 22 Feb 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>fmtstr</category><category>ctf</category>
+      <description>A single missing &quot;%s&quot; turns printf into a read-anywhere and write-anywhere primitive. Walk the whole ladder — leak the stack with %p, find your own offset, then bend %n into an arbitrary write — and the mitigations that make it harder but rarely impossible.</description>
     </item>
     <item>
       <title>a slab use-after-free, from ioctl to root</title>
@@ -214,22 +246,6 @@
       <pubDate>Sun, 18 Jan 2026 00:00:00 +0000</pubDate>
       <category>heap</category><category>pwn</category><category>glibc</category>
       <description>a from-scratch walk through the most reliable beginner heap primitive — what the tcache is, why poisoning works, and how safe-linking changed the recipe. Educational target, not a real CVE.</description>
-    </item>
-    <item>
-      <title>this site is a folder of text files</title>
-      <link>https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/</guid>
-      <pubDate>Mon, 05 Jan 2026 00:00:00 +0000</pubDate>
-      <category>meta</category><category>site</category>
-      <description>how this blog is built, how to add a post, and a tour of every feature you get for free. Delete this post once you&#x27;ve read it.</description>
-    </item>
-    <item>
-      <title>advent of pwn 2025</title>
-      <link>https://algoatson.github.io/p/advent-of-pwn/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/advent-of-pwn/</guid>
-      <pubDate>Thu, 25 Dec 2025 00:00:00 +0000</pubDate>
-      <category>ctf</category><category>pwn</category><category>rev</category>
-      <description>A December advent calendar of pwn and reversing challenges — one door a day, full solves folded behind spoilers. Day 1 byte-diffs Santa&#x27;s naughty-or-nice list; day 2 coaxes a holiday daemon into dumping coal.</description>
     </item>
   </channel>
 </rss>

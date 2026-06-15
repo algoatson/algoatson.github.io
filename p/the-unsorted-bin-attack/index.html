@@ -57,7 +57,7 @@
 writes the <em>same</em> value (a libc pointer), to an address you pick. That asymmetry
 makes it feel useless at first. It isn't: aimed at the right global, "write a huge
 number here" rewrites the rules of the allocator itself.</p>
-<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./uba</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27  (the unsorted bin attack died in 2.29)</dd></div><div><dt>technique</dt><dd>unsorted-bin scan -&gt; write a libc pointer to a chosen address</dd></div><div><dt>primitive</dt><dd>you control WHERE, not WHAT</dd></div></dl></div></figure>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./uba</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27  (the unsorted bin attack died in 2.29)</dd></div><div><dt>technique</dt><dd>unsorted-bin scan -&gt; write a libc pointer to a chosen address</dd></div><div><dt>primitive</dt><dd>you control WHERE, not WHAT</dd></div></dl></div></figure>
 <h2 id="the-write-hiding-in-the-malloc-loop">the write hiding in the malloc loop<a class="headerlink" href="#the-write-hiding-in-the-malloc-loop" title="Permanent link">#</a></h2>
 <p>When <code class="highlight">malloc</code> scans the unsorted bin, it pulls the last chunk (<code class="highlight">victim</code>) off the
 list and splices it out with these lines:</p>
@@ -146,11 +146,11 @@ write.</p>
 box: <a href="/p/tcache-poisoning-explained/">tcache poisoning</a> — where the bin barely
 checks anything and a single forged <code class="highlight">fd</code> gives you allocation anywhere.</p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
 <nav class="pager"><a class="prev" href="/p/unsafe-unlink/"><span class="lbl">&#8249; prev</span>unsafe unlink (and the safe-unlink bypass)</a><a class="next" href="/p/tcache-poisoning-explained/"><span class="lbl">next &#8250;</span>tcache poisoning, explained like you&#x27;ll have to use it</a></nav></main>
 
     <footer class="status">
-      <span>28 posts</span>
+      <span>32 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

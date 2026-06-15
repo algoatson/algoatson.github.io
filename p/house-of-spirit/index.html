@@ -59,7 +59,7 @@ larger heap buffer — and convince <code class="highlight">free()</code> to fil
 of that size hands your fake chunk straight back, so you've made <code class="highlight">malloc</code> return an
 address it should never return. Point that at a saved return address and the heap
 becomes a stack write.</p>
-<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./spirit</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.31</dd></div><div><dt>technique</dt><dd>free() a forged chunk -&gt; malloc returns attacker-chosen memory</dd></div><div><dt>requires</dt><dd>free() on a pointer you influence + somewhere writable to forge a chunk</dd></div></dl></div></figure>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./spirit</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>libc</dt><dd>2.31</dd></div><div><dt>technique</dt><dd>free() a forged chunk -&gt; malloc returns attacker-chosen memory</dd></div><div><dt>requires</dt><dd>free() on a pointer you influence + somewhere writable to forge a chunk</dd></div></dl></div></figure>
 <h2 id="the-idea">the idea<a class="headerlink" href="#the-idea" title="Permanent link">#</a></h2>
 <p><code class="highlight">free(p)</code> doesn't care whether <code class="highlight">p</code> came from <code class="highlight">malloc</code> — it reads the size field at
 <code class="highlight">p - 0x10</code>, decides which bin it belongs in, and links it there. So if you can make
@@ -146,11 +146,11 @@ once you have any <code class="highlight">free</code>-a-pointer-you-control bug.
 <a href="/p/poison-null-byte/">the poison null byte</a>, where a single stray <code class="highlight">\x00</code> is enough
 to make two chunks overlap.</p></article>
 </div>
-<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-01</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwndbg-muscle-memory/">pwndbg muscle memory</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-03-15</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/the-stack-canary-from-the-source/">the stack canary, from the source</a><span class="row__min">4 min</span></div></div></section>
 <nav class="pager"><a class="prev" href="/p/tcache-poisoning-explained/"><span class="lbl">&#8249; prev</span>tcache poisoning, explained like you&#x27;ll have to use it</a><a class="next" href="/p/poison-null-byte/"><span class="lbl">next &#8250;</span>the poison null byte</a></nav></main>
 
     <footer class="status">
-      <span>28 posts</span>
+      <span>32 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

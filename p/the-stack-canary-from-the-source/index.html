@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the stack canary, from the source — algoatson.github.io</title>
+<meta name="description" content="Follow one random value from the kernel&#x27;s AT_RANDOM, through glibc startup, into fs:0x28, and out to every function prologue. Reading the source explains the canary&#x27;s quirks — the null low byte, the per-process (not per-call) value — and each quirk is a bypass.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/the-stack-canary-from-the-source/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the stack canary, from the source — algoatson.github.io">
+<meta property="og:description" content="Follow one random value from the kernel&#x27;s AT_RANDOM, through glibc startup, into fs:0x28, and out to every function prologue. Reading the source explains the canary&#x27;s quirks — the null low byte, the per-process (not per-call) value — and each quirk is a bypass.">
+<meta property="og:url" content="https://algoatson.github.io/p/the-stack-canary-from-the-source/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/the-stack-canary-from-the-source.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the stack canary, from the source", "datePublished": "2026-03-15", "dateModified": "2026-03-15", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Follow one random value from the kernel's AT_RANDOM, through glibc startup, into fs:0x28, and out to every function prologue. Reading the source explains the canary's quirks — the null low byte, the per-process (not per-call) value — and each quirk is a bypass.", "url": "https://algoatson.github.io/p/the-stack-canary-from-the-source/", "mainEntityOfPage": "https://algoatson.github.io/p/the-stack-canary-from-the-source/", "keywords": "pwn, glibc, internals"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the stack canary, from the source</h1>
+  <div class="meta"><span>2026-03-15</span><span>4 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/glibc/">glibc</a> <a class="tag" href="/tags/internals/">internals</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-prologue-the-compiler-emits">the prologue the compiler emits</a></li>
+<li><a href="#where-fs0x28-is-filled">where fs:0x28 is filled</a></li>
+<li><a href="#four-ways-through">four ways through</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Everybody knows the stack canary: a random value the compiler drops between your
+locals and the saved return address, checked before <code class="highlight">ret</code>. Fewer people have
+followed where that value actually <em>comes from</em> — and the source answers the two
+questions that matter for breaking it: <strong>why does it end in a null byte</strong>, and
+<strong>when does it change</strong>.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">glibc</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>component</dt><dd>-fstack-protector / __stack_chk_guard</dd></div><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>property</dt><dd>per-process, low byte 0x00</dd></div></dl></div></figure>
+<h2 id="the-prologue-the-compiler-emits">the prologue the compiler emits<a class="headerlink" href="#the-prologue-the-compiler-emits" title="Permanent link">#</a></h2>
+<p>Build with <code class="highlight">-fstack-protector-strong</code> and every protected function reads the
+canary from the thread pointer (<code class="highlight">fs</code> on x86-64) at offset <code class="highlight">0x28</code>, stashes it
+above the locals, and re-checks it on the way out:</p>
+<figure class="codeblock"><figcaption><span class="fname">prologue + epilogue</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#prologue-epilogue-1">1</a></span>
+<span class="normal"><a href="#prologue-epilogue-2">2</a></span>
+<span class="normal"><a href="#prologue-epilogue-3">3</a></span>
+<span class="normal"><a href="#prologue-epilogue-4">4</a></span>
+<span class="normal"><a href="#prologue-epilogue-5">5</a></span>
+<span class="normal"><a href="#prologue-epilogue-6">6</a></span>
+<span class="normal"><a href="#prologue-epilogue-7">7</a></span>
+<span class="normal"><a href="#prologue-epilogue-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="prologue-epilogue-1"><span class="c1">; prologue</span>
+</span><span id="prologue-epilogue-2"><span class="hll"><span class="nf">mov</span><span class="w">    </span><span class="no">rax</span><span class="p">,</span><span class="w"> </span><span class="no">qword</span><span class="w"> </span><span class="no">ptr</span><span class="w"> </span><span class="no">fs</span><span class="p">:[</span><span class="mi">0x28</span><span class="p">]</span><span class="w">   </span><span class="c1">; load the per-thread guard</span>
+</span></span><span id="prologue-epilogue-3"><span class="nf">mov</span><span class="w">    </span><span class="no">qword</span><span class="w"> </span><span class="no">ptr</span><span class="w"> </span><span class="p">[</span><span class="no">rbp-8</span><span class="p">],</span><span class="w"> </span><span class="no">rax</span><span class="w">     </span><span class="c1">; place it just below the return address</span>
+</span><span id="prologue-epilogue-4"><span class="c1">; ... function body, buffers live below [rbp-8] ...</span>
+</span><span id="prologue-epilogue-5"><span class="c1">; epilogue</span>
+</span><span id="prologue-epilogue-6"><span class="nf">mov</span><span class="w">    </span><span class="no">rax</span><span class="p">,</span><span class="w"> </span><span class="no">qword</span><span class="w"> </span><span class="no">ptr</span><span class="w"> </span><span class="p">[</span><span class="no">rbp-8</span><span class="p">]</span>
+</span><span id="prologue-epilogue-7"><span class="hll"><span class="nf">sub</span><span class="w">    </span><span class="no">rax</span><span class="p">,</span><span class="w"> </span><span class="no">qword</span><span class="w"> </span><span class="no">ptr</span><span class="w"> </span><span class="no">fs</span><span class="p">:[</span><span class="mi">0x28</span><span class="p">]</span><span class="w">   </span><span class="c1">; unchanged?</span>
+</span></span><span id="prologue-epilogue-8"><span class="hll"><span class="nf">jne</span><span class="w">    </span><span class="no">__stack_chk_fail</span><span class="w">           </span><span class="c1">; no -&gt; *** stack smashing detected ***, abort</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>A linear buffer overflow that wants the return address at <code class="highlight">[rbp+8]</code> has to write
+<em>through</em> <code class="highlight">[rbp-8]</code> first. Clobber the canary, and the epilogue aborts before
+<code class="highlight">ret</code> ever runs. That's the whole idea — but every property of that value was
+decided much earlier, at process startup.</p>
+<h2 id="where-fs0x28-is-filled">where fs:0x28 is filled<a class="headerlink" href="#where-fs0x28-is-filled" title="Permanent link">#</a></h2>
+<p>At <code class="highlight">execve</code>, the <strong>kernel</strong> drops 16 random bytes into the auxiliary vector under
+the key <code class="highlight">AT_RANDOM</code>. glibc startup picks them up and turns them into the guard:</p>
+<figure class="codeblock"><figcaption><span class="fname">glibc: sysdeps/.../dl-osinfo.h (paraphrased)</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-1">1</a></span>
+<span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-2">2</a></span>
+<span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-3">3</a></span>
+<span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-4">4</a></span>
+<span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-5">5</a></span>
+<span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-6">6</a></span>
+<span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-7">7</a></span>
+<span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-8">8</a></span>
+<span class="normal"><a href="#glibc-sysdepsdl-osinfoh-paraphrased-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="glibc-sysdepsdl-osinfoh-paraphrased-1"><span class="k">static</span><span class="w"> </span><span class="kr">inline</span><span class="w"> </span><span class="kt">uintptr_t</span>
+</span><span id="glibc-sysdepsdl-osinfoh-paraphrased-2"><span class="nf">_dl_setup_stack_chk_guard</span><span class="w"> </span><span class="p">(</span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">dl_random</span><span class="p">)</span><span class="w">   </span><span class="cm">/* dl_random -&gt; AT_RANDOM bytes */</span>
+</span><span id="glibc-sysdepsdl-osinfoh-paraphrased-3"><span class="p">{</span>
+</span><span id="glibc-sysdepsdl-osinfoh-paraphrased-4"><span class="w">  </span><span class="kt">uintptr_t</span><span class="w"> </span><span class="n">ret</span><span class="p">;</span>
+</span><span id="glibc-sysdepsdl-osinfoh-paraphrased-5"><span class="w">  </span><span class="n">memcpy</span><span class="w"> </span><span class="p">(</span><span class="o">&amp;</span><span class="n">ret</span><span class="p">,</span><span class="w"> </span><span class="n">dl_random</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="w"> </span><span class="n">ret</span><span class="p">);</span><span class="w">       </span><span class="cm">/* 8 of the 16 random bytes */</span>
+</span><span id="glibc-sysdepsdl-osinfoh-paraphrased-6"><span class="hll"><span class="w">  </span><span class="cm">/* little-endian: force the least-significant byte to 0x00 */</span>
+</span></span><span id="glibc-sysdepsdl-osinfoh-paraphrased-7"><span class="hll"><span class="w">  </span><span class="n">ret</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="o">~</span><span class="p">(</span><span class="kt">uintptr_t</span><span class="p">)</span><span class="w"> </span><span class="mh">0xff</span><span class="p">;</span>
+</span></span><span id="glibc-sysdepsdl-osinfoh-paraphrased-8"><span class="hll"><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">ret</span><span class="p">;</span>
+</span></span><span id="glibc-sysdepsdl-osinfoh-paraphrased-9"><span class="hll"><span class="p">}</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>That result is stored in the global <code class="highlight">__stack_chk_guard</code> and copied into the
+thread control block so it lands at <code class="highlight">fs:0x28</code> (<code class="highlight">THREAD_SET_STACK_GUARD</code>). The
+chain, end to end:</p>
+<figure class="codeblock"><figcaption><span class="fname">one value, kernel to prologue</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#one-value-kernel-to-prologue-1">1</a></span>
+<span class="normal"><a href="#one-value-kernel-to-prologue-2">2</a></span>
+<span class="normal"><a href="#one-value-kernel-to-prologue-3">3</a></span>
+<span class="normal"><a href="#one-value-kernel-to-prologue-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="one-value-kernel-to-prologue-1">kernel execve  -&gt;  auxv AT_RANDOM (16 bytes)
+</span><span id="one-value-kernel-to-prologue-2">glibc start    -&gt;  _dl_setup_stack_chk_guard  -&gt;  __stack_chk_guard
+</span><span id="one-value-kernel-to-prologue-3">TLS setup      -&gt;  tcbhead_t.stack_guard       -&gt;  fs:0x28
+</span><span id="one-value-kernel-to-prologue-4">every function -&gt;  mov rax, fs:0x28 ; ... ; sub/jne
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Two consequences fall straight out of that code, and both are doors:</p>
+<ol>
+<li><strong>The low byte is forced to <code class="highlight">0x00</code>.</strong> Deliberate: it makes the canary
+   <em>terminate</em> a C string, so an <code class="highlight">fgets</code>/<code class="highlight">strcpy</code>-style overflow that runs over it
+   stops, and a printed-string leak of the canary won't bleed past it. The
+   practical tell — a leaked canary always ends in <code class="highlight">00</code>:
+   <figure class="codeblock hexdump"><figcaption><span class="fname">a stack frame: buffer | canary | saved rbp | ret</span><span class="lang">hex</span><button class="copy" type="button" aria-label="copy hexdump">copy</button></figcaption><div class="hx"><pre><span class="off">00000000</span>  41 41 41 41 41 41 41 41  <mark>00</mark> <mark>a3</mark> <mark>7c</mark> <mark>1e</mark> <mark>d9</mark> <mark>4b</mark> <mark>f2</mark> <mark>6e</mark>  <span class="asc">|AAAAAAAA<mark>.</mark><mark>.</mark><mark>|</mark><mark>.</mark><mark>.</mark><mark>K</mark><mark>.</mark><mark>n</mark>|</span>
+<span class="off">00000010</span>  30 e8 ff ff ff 7f 00 00  1a 92 04 00 00 00 00 00  <span class="asc">|0...............|</span></pre></div></figure></li>
+<li><strong>It is per-process, not per-call.</strong> Set once at startup, never refreshed.
+   <code class="highlight">fork()</code> copies the parent's memory — so <strong>every child of a forking server
+   shares the exact same canary</strong>. That single fact is what makes brute force
+   viable.</li>
+</ol>
+<h2 id="four-ways-through">four ways through<a class="headerlink" href="#four-ways-through" title="Permanent link">#</a></h2>
+<details class="spoiler">
+<summary>1 — leak it, then write it back (the common one)</summary>
+<p>A format string, an out-of-bounds read, or an uninitialised print hands you
+the 8 bytes. Then your overflow simply <em>includes</em> the real canary at <code class="highlight">[rbp-8]</code>,
+so <code class="highlight">sub … ; jne</code> sees no change and the check passes:
+<figure class="codeblock"><figcaption><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="n">canary</span> <span class="o">=</span> <span class="n">u64</span><span class="p">(</span><span class="n">leak</span><span class="p">)</span>                 <span class="c1"># ends in \x00, by construction</span>
+</span><span id="code-2"><span class="n">payload</span>  <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="n">offset</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">canary</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">saved_rbp</span><span class="p">)</span> <span class="o">+</span> <span class="n">rop</span>
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<details class="spoiler">
+<summary>2 — brute force it on a fork server</summary>
+<p>Because <code class="highlight">fork()</code> children inherit the parent's canary, you can recover it a
+byte at a time: overwrite one canary byte and see whether the child crashes
+(wrong) or runs on (right). The low byte is already known to be <code class="highlight">0x00</code>, so:
+$$ \text{attempts} \le 256 \times 7 = 1792 $$
+versus the <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mn>2</mn><mrow><mn>56</mn></mrow></msup></mrow></math></span> of guessing blind. Same trick recovers the saved return
+address / PIE base byte-by-byte afterward.</p>
+</details>
+<details class="spoiler">
+<summary>3 — overwrite the master copy</summary>
+<p>With an arbitrary write you can set the <em>reference</em> the epilogue compares
+against — <code class="highlight">__stack_chk_guard</code> and the TLS <code class="highlight">fs:0x28</code> slot — to a value you also
+write on the stack. Make both sides match (even match to zero) and the check is
+a formality.</p>
+</details>
+<details class="spoiler">
+<summary>4 — don't cross it at all</summary>
+<p>The canary only guards the path to <code class="highlight">ret</code>. A local <strong>function pointer above the
+canary</strong>, a saved-RBP-only corruption feeding a later pivot, or a write
+primitive that never touches <code class="highlight">[rbp-8]</code> reaches control flow without disturbing
+it. The canary protects <em>one</em> edge, not the whole frame.</p>
+</details>
+<p>Reading the source turns the canary from a magic number into a value with a
+biography: born in the kernel's RNG, laundered through glibc with its low byte
+clipped, frozen for the life of the process, and inherited verbatim by every
+fork. Each of those is a sentence in the same paragraph — and each is a way in.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/ecdsa-nonce-reuse/"><span class="lbl">&#8249; newer</span>two signatures, one nonce: recovering an ECDSA key</a><a class="next" href="/p/printf-is-a-write-primitive/"><span class="lbl">older &#8250;</span>printf is a write primitive</a></nav></main>
+
+    <footer class="status">
+      <span>32 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

