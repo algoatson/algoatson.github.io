@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>the CBC padding oracle — decrypting without the key — algoatson.github.io</title>
+<meta name="description" content="A server that merely tells you whether a decrypted ciphertext had valid padding leaks the plaintext one byte at a time. No key, no brute force — just CBC&#x27;s structure and a single bit of feedback turned into full decryption.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/cbc-padding-oracle/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="the CBC padding oracle — decrypting without the key — algoatson.github.io">
+<meta property="og:description" content="A server that merely tells you whether a decrypted ciphertext had valid padding leaks the plaintext one byte at a time. No key, no brute force — just CBC&#x27;s structure and a single bit of feedback turned into full decryption.">
+<meta property="og:url" content="https://algoatson.github.io/p/cbc-padding-oracle/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/cbc-padding-oracle.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "the CBC padding oracle — decrypting without the key", "datePublished": "2026-03-18", "dateModified": "2026-03-18", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A server that merely tells you whether a decrypted ciphertext had valid padding leaks the plaintext one byte at a time. No key, no brute force — just CBC's structure and a single bit of feedback turned into full decryption.", "url": "https://algoatson.github.io/p/cbc-padding-oracle/", "mainEntityOfPage": "https://algoatson.github.io/p/cbc-padding-oracle/", "keywords": "crypto, ctf"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>the CBC padding oracle — decrypting without the key</h1>
+  <div class="meta"><span>2026-03-18</span><span>3 min read</span><a class="tag" href="/tags/crypto/">crypto</a> <a class="tag" href="/tags/ctf/">ctf</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/crypto-attacks/">crypto attacks</a><span class="series__pos">part 1 / 4 · ~13 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:25%"></span></div><ol class="series__list"><li class="cur" aria-current="true">the CBC padding oracle — decrypting without the key</li><li><a href="/p/hash-length-extension/">hash length extension — appending to a MAC you can&#x27;t compute</a></li><li><a href="/p/rsa-attacks-tour/">a tour of RSA attacks</a></li><li><a href="/p/ecdsa-nonce-reuse/">two signatures, one nonce: recovering an ECDSA key</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-structure-the-attack-exploits">the structure the attack exploits</a></li>
+<li><a href="#one-byte-at-a-time">one byte at a time</a></li>
+<li><a href="#the-fix-is-integrity">the fix is integrity</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The padding oracle is the canonical lesson that confidentiality without integrity
+is no confidentiality at all. A server using AES-CBC that distinguishes "bad
+padding" from "bad data" — by error message, status code, or response time — hands
+you a one-bit oracle, and that one bit is enough to decrypt any ciphertext you can
+replay.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>scheme</dt><dd>AES-CBC + PKCS#7 padding</dd></div><div><dt>oracle</dt><dd>1 bit — &quot;was the padding valid after decryption?&quot;</dd></div><div><dt>goal</dt><dd>recover plaintext (and forge ciphertext) with no key</dd></div></dl></div></figure>
+<h2 id="the-structure-the-attack-exploits">the structure the attack exploits<a class="headerlink" href="#the-structure-the-attack-exploits" title="Permanent link">#</a></h2>
+<p>CBC decryption XORs each decrypted block with the <em>previous ciphertext block</em>:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><msub><mi>P</mi><mi>i</mi></msub><mo>&#x0003D;</mo><msub><mi>D</mi><mi>K</mi></msub><mo stretchy="false">&#x00028;</mo><msub><mi>C</mi><mi>i</mi></msub><mo stretchy="false">&#x00029;</mo><mo>&#x02295;</mo><msub><mi>C</mi><mrow><mi>i</mi><mo>&#x02212;</mo><mn>1</mn></mrow></msub></mrow></math></div>
+<p>The attacker can't compute <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>D</mi><mi>K</mi></msub></mrow></math></span>, but they fully control <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>C</mi><mrow><mi>i</mi><mo>&#x02212;</mo><mn>1</mn></mrow></msub></mrow></math></span> when replaying.
+Call the unknown <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>I</mi><mi>i</mi></msub><mo>&#x0003D;</mo><msub><mi>D</mi><mi>K</mi></msub><mo stretchy="false">&#x00028;</mo><msub><mi>C</mi><mi>i</mi></msub><mo stretchy="false">&#x00029;</mo></mrow></math></span> the <strong>intermediate</strong>. If you send a crafted block
+<span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mi>C</mi><mi>&#x02032;</mi></msup></mrow></math></span> in front of a target block <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>C</mi><mi>t</mi></msub></mrow></math></span>, the server computes <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mi>P</mi><mi>&#x02032;</mi></msup><mo>&#x0003D;</mo><msub><mi>I</mi><mi>t</mi></msub><mo>&#x02295;</mo><msup><mi>C</mi><mi>&#x02032;</mi></msup></mrow></math></span> —
+and tells you whether <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mi>P</mi><mi>&#x02032;</mi></msup></mrow></math></span> ends in valid PKCS#7 padding. You're choosing <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mi>C</mi><mi>&#x02032;</mi></msup></mrow></math></span>, so
+you can drive <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mi>P</mi><mi>&#x02032;</mi></msup></mrow></math></span> to a padding you want and solve for <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>I</mi><mi>t</mi></msub></mrow></math></span>.</p>
+<h2 id="one-byte-at-a-time">one byte at a time<a class="headerlink" href="#one-byte-at-a-time" title="Permanent link">#</a></h2>
+<p>PKCS#7 pads with the pad length repeated (<code class="highlight">01</code>, or <code class="highlight">02 02</code>, or <code class="highlight">03 03 03</code>, …).
+Recover the intermediate's last byte by making the last plaintext byte <code class="highlight">0x01</code>:</p>
+<figure class="codeblock"><figcaption><span class="fname">recover I_t[15] (the last intermediate byte)</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#recover-i-t15-the-last-intermediate-byte-1">1</a></span>
+<span class="normal"><a href="#recover-i-t15-the-last-intermediate-byte-2">2</a></span>
+<span class="normal"><a href="#recover-i-t15-the-last-intermediate-byte-3">3</a></span>
+<span class="normal"><a href="#recover-i-t15-the-last-intermediate-byte-4">4</a></span>
+<span class="normal"><a href="#recover-i-t15-the-last-intermediate-byte-5">5</a></span>
+<span class="normal"><a href="#recover-i-t15-the-last-intermediate-byte-6">6</a></span>
+<span class="normal"><a href="#recover-i-t15-the-last-intermediate-byte-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="recover-i-t15-the-last-intermediate-byte-1">for guess in 0..255:
+</span><span id="recover-i-t15-the-last-intermediate-byte-2">    C&#39;[15] = guess                       # leave C&#39;[0..14] arbitrary
+</span><span id="recover-i-t15-the-last-intermediate-byte-3">    send  C&#39; || C_t  to the oracle
+</span><span id="recover-i-t15-the-last-intermediate-byte-4">    if padding_valid:                    # P&#39;[15] == 0x01
+</span><span id="recover-i-t15-the-last-intermediate-byte-5">        I_t[15] = guess XOR 0x01         # because P&#39;[15] = I_t[15] XOR C&#39;[15]
+</span><span id="recover-i-t15-the-last-intermediate-byte-6">        break
+</span><span id="recover-i-t15-the-last-intermediate-byte-7">plaintext[15] = I_t[15] XOR C_{t-1}[15]  # XOR with the REAL previous block
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Then climb to the next byte: set <code class="highlight">C&#39;[15]</code> so <code class="highlight">P&#39;[15] == 0x02</code> (you know <code class="highlight">I_t[15]</code>
+now), and brute <code class="highlight">C&#39;[14]</code> until the oracle reports valid <code class="highlight">02 02</code>:</p>
+<figure class="codeblock"><figcaption><span class="fname">generalise to byte k (target pad value = p = 16-k)</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#generalise-to-byte-k-target-pad-value-p-16-k-1">1</a></span>
+<span class="normal"><a href="#generalise-to-byte-k-target-pad-value-p-16-k-2">2</a></span>
+<span class="normal"><a href="#generalise-to-byte-k-target-pad-value-p-16-k-3">3</a></span>
+<span class="normal"><a href="#generalise-to-byte-k-target-pad-value-p-16-k-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="generalise-to-byte-k-target-pad-value-p-16-k-1">fix C&#39;[k+1..15] so those plaintext bytes all equal p   (using known I_t bytes)
+</span><span id="generalise-to-byte-k-target-pad-value-p-16-k-2">brute C&#39;[k] until padding_valid:
+</span><span id="generalise-to-byte-k-target-pad-value-p-16-k-3">    I_t[k] = C&#39;[k] XOR p
+</span><span id="generalise-to-byte-k-target-pad-value-p-16-k-4">    plaintext[k] = I_t[k] XOR C_{t-1}[k]
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Sixteen bytes, at most 256 queries each — a few thousand requests to decrypt a
+block, with no key in sight. Walk every block and the whole message falls.</p>
+<details class="spoiler">
+<summary>full plaintext from a yes/no</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] block 2/3  byte 15: 142 queries  -&gt; &#39;n&#39;
+</span><span id="code-2">[*] block 2/3  byte 14:  88 queries  -&gt; &#39;o&#39;
+</span><span id="code-3">...
+</span><span id="code-4">recovered: {&quot;user&quot;:&quot;admin&quot;,&quot;role&quot;:&quot;guest&quot;}
+</span><span id="code-5">segfault{one_bit_of_padding_is_one_bit_too_many}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<p>And it runs in reverse: because you can force any plaintext block by choosing <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mi>C</mi><mi>&#x02032;</mi></msup></mrow></math></span>,
+the same oracle lets you <em>encrypt</em> chosen plaintext — forging a valid-looking
+ciphertext (e.g. flipping <code class="highlight">role:guest</code> to <code class="highlight">role:admin</code>) without the key.</p>
+<h2 id="the-fix-is-integrity">the fix is integrity<a class="headerlink" href="#the-fix-is-integrity" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Authenticated encryption.</strong> AES-GCM, ChaCha20-Poly1305, or
+  encrypt-then-MAC: the MAC is checked <em>first</em>, so a tampered ciphertext is
+  rejected before any padding is ever examined — there's no oracle to query.</li>
+<li><strong>Don't leak the distinction.</strong> Identical responses (and constant-time padding
+  checks) for "bad padding" and "bad MAC"/"bad data" — but this is a fragile patch
+  next to just authenticating.</li>
+<li><strong>MAC-then-encrypt is not enough</strong>, and unauthenticated CBC never is.</li>
+</ul>
+<p>The padding oracle is why "encrypt with AES" is not a security claim. CBC keeps the
+plaintext secret only as long as nobody can tell a malformed decryption from a
+well-formed one — and almost every real system, somewhere, tells you.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/writeup-static-srop/">writeup: static — no libc, no leak, just SROP</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><span></span><a class="next" href="/p/hash-length-extension/"><span class="lbl">next &#8250;</span>hash length extension — appending to a MAC you can&#x27;t compute</a></nav></main>
+
+    <footer class="status">
+      <span>64 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

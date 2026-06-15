@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>from OOB to arbitrary R/W (and a shell) — algoatson.github.io</title>
+<meta name="description" content="The primitives and the bug are in hand; this is the escalation every JS-engine exploit ends with. Forge a TypedArray whose backing-store pointer you control, get read/write anywhere, then turn that into code execution — and the modern mitigations (the V8 sandbox, W^X JIT) that make the last step the hard one now.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/oob-to-arbitrary-rw/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="from OOB to arbitrary R/W (and a shell) — algoatson.github.io">
+<meta property="og:description" content="The primitives and the bug are in hand; this is the escalation every JS-engine exploit ends with. Forge a TypedArray whose backing-store pointer you control, get read/write anywhere, then turn that into code execution — and the modern mitigations (the V8 sandbox, W^X JIT) that make the last step the hard one now.">
+<meta property="og:url" content="https://algoatson.github.io/p/oob-to-arbitrary-rw/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/oob-to-arbitrary-rw.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "from OOB to arbitrary R/W (and a shell)", "datePublished": "2026-01-16", "dateModified": "2026-01-16", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The primitives and the bug are in hand; this is the escalation every JS-engine exploit ends with. Forge a TypedArray whose backing-store pointer you control, get read/write anywhere, then turn that into code execution — and the modern mitigations (the V8 sandbox, W^X JIT) that make the last step the hard one now.", "url": "https://algoatson.github.io/p/oob-to-arbitrary-rw/", "mainEntityOfPage": "https://algoatson.github.io/p/oob-to-arbitrary-rw/", "keywords": "pwn, browser"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>from OOB to arbitrary R/W (and a shell)</h1>
+  <div class="meta"><span>2026-01-16</span><span>4 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/browser/">browser</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/browser-exploitation/">browser exploitation</a><span class="series__pos">part 3 / 3 · ~10 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:100%"></span></div><ol class="series__list"><li><a href="/p/addrof-fakeobj-primitives/">addrof and fakeobj — the two primitives that own a JS engine</a></li><li><a href="/p/jit-type-confusion/">JIT type confusion — when the optimizer believes a lie</a></li><li class="cur" aria-current="true">from OOB to arbitrary R/W (and a shell)</li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-master-primitive-a-fake-typedarray">the master primitive: a fake TypedArray</a></li>
+<li><a href="#step-2-rw-code-execution">step 2: R/W → code execution</a></li>
+<li><a href="#the-mitigations-that-moved-the-finish-line">the mitigations that moved the finish line</a></li>
+<li><a href="#the-shape-of-the-whole-field">the shape of the whole field</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><a href="/p/addrof-fakeobj-primitives/">addrof/fakeobj</a> are the primitives;
+<a href="/p/jit-type-confusion/">a JIT bug</a> is one way to get them. This part is the
+finish line they all share: parlay them into <strong>arbitrary read/write</strong>, then into
+<strong>code execution</strong>. The first half is mechanical; the second is where the last
+decade of browser hardening lives.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>have</dt><dd>addrof + fakeobj (or an OOB array)</dd></div><div><dt>step 1</dt><dd>a TypedArray with a backing-store pointer YOU control -&gt; arbitrary R/W</dd></div><div><dt>step 2</dt><dd>R/W -&gt; code execution (and the mitigations fighting step 2)</dd></div></dl></div></figure>
+<h2 id="the-master-primitive-a-fake-typedarray">the master primitive: a fake TypedArray<a class="headerlink" href="#the-master-primitive-a-fake-typedarray" title="Permanent link">#</a></h2>
+<p>A <code class="highlight">TypedArray</code>/<code class="highlight">DataView</code> is just a header plus a pointer to its backing store. If
+you can forge that header with a chosen backing-store pointer, every <code class="highlight">array[i]</code>
+read/write becomes a read/write at <strong>any address you set</strong>. With <code class="highlight">fakeobj</code> you do
+exactly that:</p>
+<figure class="codeblock"><figcaption><span class="fname">arbitrary R/W from fakeobj</span><span class="lang">js</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#arbitrary-rw-from-fakeobj-1">1</a></span>
+<span class="normal"><a href="#arbitrary-rw-from-fakeobj-2">2</a></span>
+<span class="normal"><a href="#arbitrary-rw-from-fakeobj-3">3</a></span>
+<span class="normal"><a href="#arbitrary-rw-from-fakeobj-4">4</a></span>
+<span class="normal"><a href="#arbitrary-rw-from-fakeobj-5">5</a></span>
+<span class="normal"><a href="#arbitrary-rw-from-fakeobj-6">6</a></span>
+<span class="normal"><a href="#arbitrary-rw-from-fakeobj-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="arbitrary-rw-from-fakeobj-1"><span class="c1">// lay out the bytes of a fake TypedArray (map, length, and backing-store ptr)</span>
+</span><span id="arbitrary-rw-from-fakeobj-2"><span class="kd">let</span><span class="w"> </span><span class="nx">container</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="nx">flt_map</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="nx">itof</span><span class="p">(</span><span class="mi">0n</span><span class="p">)</span><span class="w"> </span><span class="cm">/* backingStore */</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">];</span>
+</span><span id="arbitrary-rw-from-fakeobj-3"><span class="kd">let</span><span class="w"> </span><span class="nx">fake</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">fakeobj</span><span class="p">(</span><span class="nx">addrof</span><span class="p">(</span><span class="nx">container</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">HEADER_OFFSET</span><span class="p">);</span>
+</span><span id="arbitrary-rw-from-fakeobj-4"><span class="hll">
+</span></span><span id="arbitrary-rw-from-fakeobj-5"><span class="kd">function</span><span class="w"> </span><span class="nx">read64</span><span class="p">(</span><span class="nx">addr</span><span class="p">)</span><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nx">container</span><span class="p">[</span><span class="nx">BS_SLOT</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">itof</span><span class="p">(</span><span class="nx">addr</span><span class="p">);</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">ftoi</span><span class="p">(</span><span class="nx">fake</span><span class="p">[</span><span class="mf">0</span><span class="p">]);</span><span class="w"> </span><span class="p">}</span>
+</span><span id="arbitrary-rw-from-fakeobj-6"><span class="kd">function</span><span class="w"> </span><span class="nx">write64</span><span class="p">(</span><span class="nx">addr</span><span class="p">,</span><span class="w"> </span><span class="nx">val</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">container</span><span class="p">[</span><span class="nx">BS_SLOT</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">itof</span><span class="p">(</span><span class="nx">addr</span><span class="p">);</span><span class="w"> </span><span class="nx">fake</span><span class="p">[</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">itof</span><span class="p">(</span><span class="nx">val</span><span class="p">);</span><span class="w"> </span><span class="p">}</span>
+</span><span id="arbitrary-rw-from-fakeobj-7"><span class="c1">// move the backing-store pointer, then index the fake array -&gt; R/W anywhere</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Rewrite the backing-store slot before each access and the same fake array reads or
+writes anywhere in the process. That's the <strong>arbitrary read/write</strong> every
+JS-engine exploit is built to reach. From here you leak the engine's own pointers,
+walk structures, and find your code-exec target.</p>
+<h2 id="step-2-rw-code-execution">step 2: R/W → code execution<a class="headerlink" href="#step-2-rw-code-execution" title="Permanent link">#</a></h2>
+<p>Historically this was trivial: JITed code lived in <strong>RWX</strong> pages, so you wrote
+shellcode straight into a JIT'd function's code and called it. The classic reliable
+variant used <strong>WebAssembly</strong> — instantiating a WASM module created an RWX page;
+overwrite its body via your R/W and jump in.</p>
+<figure class="codeblock"><figcaption><span class="fname">the old, easy finish (RWX WASM page)</span><span class="lang">js</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-old-easy-finish-rwx-wasm-page-1">1</a></span>
+<span class="normal"><a href="#the-old-easy-finish-rwx-wasm-page-2">2</a></span>
+<span class="normal"><a href="#the-old-easy-finish-rwx-wasm-page-3">3</a></span>
+<span class="normal"><a href="#the-old-easy-finish-rwx-wasm-page-4">4</a></span>
+<span class="normal"><a href="#the-old-easy-finish-rwx-wasm-page-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-old-easy-finish-rwx-wasm-page-1"><span class="kd">let</span><span class="w"> </span><span class="nx">wasm</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">WebAssembly</span><span class="p">.</span><span class="nx">Instance</span><span class="p">(</span><span class="ow">new</span><span class="w"> </span><span class="nx">WebAssembly</span><span class="p">.</span><span class="nx">Module</span><span class="p">(</span><span class="nx">bytes</span><span class="p">));</span>
+</span><span id="the-old-easy-finish-rwx-wasm-page-2"><span class="kd">let</span><span class="w"> </span><span class="nx">rwx</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="nx">read64</span><span class="p">(</span><span class="nx">addrof</span><span class="p">(</span><span class="nx">wasm</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">WASM_RWX_OFFSET</span><span class="p">);</span><span class="w">  </span><span class="c1">// find the RWX page</span>
+</span><span id="the-old-easy-finish-rwx-wasm-page-3"><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">let</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="nx">shellcode</span><span class="p">.</span><span class="nx">length</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">++</span><span class="p">)</span><span class="w">          </span><span class="c1">// overwrite it via arb-write</span>
+</span><span id="the-old-easy-finish-rwx-wasm-page-4"><span class="w">    </span><span class="nx">write8</span><span class="p">(</span><span class="nx">rwx</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">shellcode</span><span class="p">[</span><span class="nx">i</span><span class="p">]);</span>
+</span><span id="the-old-easy-finish-rwx-wasm-page-5"><span class="nx">wasm</span><span class="p">.</span><span class="nx">exports</span><span class="p">.</span><span class="nx">f</span><span class="p">();</span><span class="w">                                    </span><span class="c1">// execute</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-mitigations-that-moved-the-finish-line">the mitigations that moved the finish line<a class="headerlink" href="#the-mitigations-that-moved-the-finish-line" title="Permanent link">#</a></h2>
+<p>Step 1 still works; step 2 is where modern engines fight back, and it's why a
+present-day browser chain is so much more than "get R/W":</p>
+<ul>
+<li><strong>W^X for the JIT.</strong> RWX JIT pages are gone — code is written through a separate,
+  short-lived mapping and executed read-only. No more "write shellcode into the JIT
+  page." You pivot to a <strong>ROP/JOP</strong> chain or data-only techniques instead.</li>
+<li><strong>The V8 heap sandbox ("Ubercage").</strong> Pointers inside the V8 heap are
+  <em>sandboxed</em> — backing-store pointers become offsets within a reserved cage, so a
+  fake TypedArray can only reach <em>inside the cage</em>, not arbitrary process memory.
+  Arbitrary-R/W-in-the-cage no longer means arbitrary-R/W-in-the-process; you now
+  need a <em>second</em> bug (an "out-of-sandbox" primitive) to escape it.</li>
+<li><strong>Pointer compression</strong> changes addresses to 32-bit cage offsets — your
+  <code class="highlight">addrof</code>/R/W arithmetic adapts to the compressed representation.</li>
+<li><strong>CFI / CET</strong> on the host then constrains the control-flow hijack at the end.</li>
+</ul>
+<details class="spoiler">
+<summary>arbitrary R/W, then a shell (pre-sandbox era)</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] fake TypedArray @ cage+0x...   arbitrary R/W online
+</span><span id="code-2">[*] leaked WASM RWX page @ 0x7f...; wrote 0x2d bytes of shellcode
+</span><span id="code-3">[*] called exports.f() -&gt; execve(&quot;/bin/sh&quot;)
+</span><span id="code-4">segfault{addrof_fakeobj_rw_rce}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="the-shape-of-the-whole-field">the shape of the whole field<a class="headerlink" href="#the-shape-of-the-whole-field" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>The chain is layered now.</strong> Bug → addrof/fakeobj → in-cage R/W → <em>sandbox
+  escape</em> → W^X-defeating code-exec. Each mitigation added a stage; none removed the
+  one before it.</li>
+<li><strong>Data-only is ascendant.</strong> Because code-exec is so guarded, many modern chains
+  stay in data: corrupt interpreter state, function pointers the engine itself
+  calls, or WASM/JIT metadata, never executing injected bytes at all.</li>
+<li><strong>Two bugs are the norm.</strong> The sandbox means one memory bug often isn't enough —
+  you bring a renderer bug <em>and</em> a sandbox-escape bug, which is why full chains are
+  team-scale efforts.</li>
+</ul>
+<p>That's browser exploitation end to end: a bug becomes
+<a href="/p/addrof-fakeobj-primitives/">addrof/fakeobj</a>, those become a fake TypedArray and
+arbitrary R/W, and the rest of the chain is a fight against the cage and W^X. The
+primitives are eternal; the finish line keeps moving, and following where it moves
+is the whole game.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/jit-type-confusion/"><span class="lbl">&#8249; prev</span>JIT type confusion — when the optimizer believes a lie</a></nav></main>
+
+    <footer class="status">
+      <span>64 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

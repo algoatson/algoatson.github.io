@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>JIT type confusion — when the optimizer believes a lie — algoatson.github.io</title>
+<meta name="description" content="The fastest path to the addrof/fakeobj primitives is a bug in the JIT itself. Convince the optimizer that a value has a type or range it doesn&#x27;t, and it removes a bounds check it shouldn&#x27;t have — handing you an out-of-bounds access in compiled, unguarded code.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/jit-type-confusion/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="JIT type confusion — when the optimizer believes a lie — algoatson.github.io">
+<meta property="og:description" content="The fastest path to the addrof/fakeobj primitives is a bug in the JIT itself. Convince the optimizer that a value has a type or range it doesn&#x27;t, and it removes a bounds check it shouldn&#x27;t have — handing you an out-of-bounds access in compiled, unguarded code.">
+<meta property="og:url" content="https://algoatson.github.io/p/jit-type-confusion/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/jit-type-confusion.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "JIT type confusion — when the optimizer believes a lie", "datePublished": "2026-01-13", "dateModified": "2026-01-13", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The fastest path to the addrof/fakeobj primitives is a bug in the JIT itself. Convince the optimizer that a value has a type or range it doesn't, and it removes a bounds check it shouldn't have — handing you an out-of-bounds access in compiled, unguarded code.", "url": "https://algoatson.github.io/p/jit-type-confusion/", "mainEntityOfPage": "https://algoatson.github.io/p/jit-type-confusion/", "keywords": "pwn, browser"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>JIT type confusion — when the optimizer believes a lie</h1>
+  <div class="meta"><span>2026-01-13</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/browser/">browser</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/browser-exploitation/">browser exploitation</a><span class="series__pos">part 2 / 3 · ~10 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:67%"></span></div><ol class="series__list"><li><a href="/p/addrof-fakeobj-primitives/">addrof and fakeobj — the two primitives that own a JS engine</a></li><li class="cur" aria-current="true">JIT type confusion — when the optimizer believes a lie</li><li><a href="/p/oob-to-arbitrary-rw/">from OOB to arbitrary R/W (and a shell)</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#how-the-jit-earns-its-bugs">how the JIT earns its bugs</a></li>
+<li><a href="#from-oob-to-the-primitives">from OOB to the primitives</a></li>
+<li><a href="#the-defenders-moves">the defenders' moves</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><a href="/p/addrof-fakeobj-primitives/">Part 1</a> assumed a type confusion fell out of the
+sky. This part is where it usually comes from on a modern engine: not the
+interpreter, but the <strong>optimizing JIT</strong>. The compiler reasons about types and
+ranges to delete "redundant" checks — and if you can make its reasoning wrong, it
+deletes a check that was load-bearing.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>component</dt><dd>the optimizing JIT (V8 TurboFan / JSC DFG-FTL)</dd></div><div><dt>bug</dt><dd>a typer/range miscalculation -&gt; an eliminated bounds check</dd></div><div><dt>yield</dt><dd>OOB read/write on a JS array&#x27;s backing store</dd></div></dl></div></figure>
+<h2 id="how-the-jit-earns-its-bugs">how the JIT earns its bugs<a class="headerlink" href="#how-the-jit-earns-its-bugs" title="Permanent link">#</a></h2>
+<p>To make hot JavaScript fast, the optimizer speculates: it watches the types you
+actually pass, assumes they'll keep coming, and compiles specialized code guarded
+by cheap checks. Crucially, it runs a <strong>typer</strong> that tracks the possible range/type
+of every value, and a <strong>bounds-check elimination</strong> pass that removes
+<code class="highlight">CheckBounds</code> nodes it can <em>prove</em> are always in range.</p>
+<p>That proof is only as sound as the typer. If a single operation's modeled range is
+wrong — too wide, too narrow, missing a corner like <code class="highlight">-0</code> or <code class="highlight">NaN</code> — the optimizer
+can "prove" an index is in bounds when it isn't, and drop the check. The compiled
+code then indexes the backing store with no guard at all.</p>
+<figure class="codeblock"><figcaption><span class="fname">the shape of a typer bug</span><span class="lang">js</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-shape-of-a-typer-bug-1"> 1</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-2"> 2</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-3"> 3</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-4"> 4</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-5"> 5</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-6"> 6</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-7"> 7</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-8"> 8</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-9"> 9</a></span>
+<span class="normal"><a href="#the-shape-of-a-typer-bug-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-shape-of-a-typer-bug-1"><span class="kd">function</span><span class="w"> </span><span class="nx">evil</span><span class="p">(</span><span class="nx">x</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="the-shape-of-a-typer-bug-2"><span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="nx">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="mf">1.1</span><span class="p">,</span><span class="w"> </span><span class="mf">2.2</span><span class="p">,</span><span class="w"> </span><span class="mf">3.3</span><span class="p">,</span><span class="w"> </span><span class="mf">4.4</span><span class="p">];</span>
+</span><span id="the-shape-of-a-typer-bug-3"><span class="w">    </span><span class="c1">// some operation the typer mis-models, producing an index the optimizer</span>
+</span><span id="the-shape-of-a-typer-bug-4"><span class="w">    </span><span class="c1">// believes is 0..3 but can actually be larger:</span>
+</span><span id="the-shape-of-a-typer-bug-5"><span class="hll"><span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">miscomputed_index</span><span class="p">(</span><span class="nx">x</span><span class="p">);</span><span class="w">       </span><span class="c1">// typer thinks: range [0,3]</span>
+</span></span><span id="the-shape-of-a-typer-bug-6"><span class="w">    </span><span class="nx">a</span><span class="p">[</span><span class="nx">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.1</span><span class="p">;</span><span class="w">                         </span><span class="c1">// CheckBounds removed -&gt; OOB write</span>
+</span><span id="the-shape-of-a-typer-bug-7"><span class="hll"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">a</span><span class="p">;</span>
+</span></span><span id="the-shape-of-a-typer-bug-8"><span class="p">}</span>
+</span><span id="the-shape-of-a-typer-bug-9"><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">let</span><span class="w"> </span><span class="nx">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span><span class="p">;</span><span class="w"> </span><span class="nx">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">100000</span><span class="p">;</span><span class="w"> </span><span class="nx">k</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="nx">evil</span><span class="p">(</span><span class="nx">ok</span><span class="p">);</span><span class="w"> </span><span class="c1">// warm it up: force JIT compilation</span>
+</span><span id="the-shape-of-a-typer-bug-10"><span class="nx">evil</span><span class="p">(</span><span class="nx">trigger</span><span class="p">);</span><span class="w">                              </span><span class="c1">// now run the unguarded path</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Real instances of the pattern read like a museum of subtle arithmetic:</p>
+<ul>
+<li><strong>CVE-2018-17463</strong> — V8's <code class="highlight">JSCreateObject</code> / <code class="highlight">Object.create</code> typer returned a
+  type that let later range analysis go wrong.</li>
+<li><strong>The <code class="highlight">Math.expm1</code> <code class="highlight">-0</code> bug</strong> — the typer modeled the result as plain <code class="highlight">Number</code>
+  and missed that it could be <code class="highlight">-0</code>, breaking downstream range math.</li>
+<li><strong><code class="highlight">Array.prototype</code> length-tracking bugs</strong> — the optimizer's view of an array's
+  length drifting from reality after a side-effecting callback.</li>
+</ul>
+<p>Different functions, identical consequence: a <code class="highlight">CheckBounds</code> removed on the strength
+of a range the typer got wrong.</p>
+<h2 id="from-oob-to-the-primitives">from OOB to the primitives<a class="headerlink" href="#from-oob-to-the-primitives" title="Permanent link">#</a></h2>
+<p>The eliminated check gives you an out-of-bounds read/write on a backing store. You
+groom the heap so that just past your victim array sits another array's <em>length
+field</em> or a sibling array of a different elements-kind. Now:</p>
+<ul>
+<li>OOB-write the neighbour's length → a giant array → relative R/W over the heap;</li>
+<li>or OOB across a <code class="highlight">PACKED_DOUBLE</code> and a <code class="highlight">PACKED</code> (object) array so the two alias —
+  which is exactly the <a href="/p/addrof-fakeobj-primitives/">float/object confusion</a> that
+  builds <code class="highlight">addrof</code>/<code class="highlight">fakeobj</code>.</li>
+</ul>
+<figure class="codeblock"><figcaption><span class="fname">OOB write -&gt; corrupt a neighbour&#x27;s length</span><span class="lang">js</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#oob-write---corrupt-a-neighbours-length-1">1</a></span>
+<span class="normal"><a href="#oob-write---corrupt-a-neighbours-length-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="oob-write---corrupt-a-neighbours-length-1"><span class="nx">oob</span><span class="p">[</span><span class="w"> </span><span class="nx">LEN_SLOT_OF_NEIGHBOUR</span><span class="w"> </span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">itof</span><span class="p">(</span><span class="mh">0x1000n</span><span class="p">);</span><span class="w">   </span><span class="c1">// neighbour.length := huge</span>
+</span><span id="oob-write---corrupt-a-neighbours-length-2"><span class="c1">// neighbour is now an OOB array: relative read/write across the V8 heap</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>a removed bounds check, an out-of-bounds array</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] sprayed arrays; victim @ ...e8, neighbour length @ ...f0
+</span><span id="code-2">[*] typer bug fired: a[8] write with no CheckBounds
+</span><span id="code-3">[*] neighbour.length = 0x1000  -&gt; addrof/fakeobj online
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="the-defenders-moves">the defenders' moves<a class="headerlink" href="#the-defenders-moves" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Verifier / typer hardening.</strong> Each of these bugs is met with a typer fix, plus
+  fuzzers (Fuzzilli) hunting the next range error. It's a grind, not a wall.</li>
+<li><strong>Hardening the <em>consequence</em>.</strong> V8 added bounds checks that resist typer lies in
+  sensitive spots, and the <strong>heap sandbox</strong> (next part) limits what an OOB even
+  reaches.</li>
+<li><strong>JIT mitigations broadly</strong> — but the typer is enormous surface, and a single
+  wrong range is still a full compromise.</li>
+</ul>
+<p>The lesson that makes JIT bugs feel different from heap bugs: you're not corrupting
+memory directly, you're corrupting the <em>compiler's beliefs</em>, and letting it corrupt
+memory for you with the bounds check it was sure it didn't need. Get the OOB, reach
+the <a href="/p/addrof-fakeobj-primitives/">float/object confusion</a>, and
+<a href="/p/oob-to-arbitrary-rw/">part 3</a> turns it into read/write over the entire address
+space.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/addrof-fakeobj-primitives/"><span class="lbl">&#8249; prev</span>addrof and fakeobj — the two primitives that own a JS engine</a><a class="next" href="/p/oob-to-arbitrary-rw/"><span class="lbl">next &#8250;</span>from OOB to arbitrary R/W (and a shell)</a></nav></main>
+
+    <footer class="status">
+      <span>64 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

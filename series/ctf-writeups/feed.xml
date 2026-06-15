@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/series/ctf-writeups/feed.xml" rel="self" type="application/rss+xml"/>
     <description>A stripped, statically-linked binary with a stack overflow and almost nothing else — no PLT, no libc to leak, barely any gadgets. The way out is to write &quot;/bin/sh&quot; with a read, then chain two forged sigreturn frames into an execve. A clean SROP from recon to shell.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 15:55:02 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 16:54:31 +0000</lastBuildDate>
     <item>
       <title>writeup: notekeeper — a UAF from menu to shell</title>
       <link>https://algoatson.github.io/p/writeup-notekeeper-uaf/</link>

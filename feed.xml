@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
     <description>NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 15:55:02 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 16:54:32 +0000</lastBuildDate>
     <item>
       <title>House of Apple 2 — FSOP after the hooks died</title>
       <link>https://algoatson.github.io/p/house-of-apple-2/</link>

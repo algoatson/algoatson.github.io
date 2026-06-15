@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>hash length extension — appending to a MAC you can&#x27;t compute — algoatson.github.io</title>
+<meta name="description" content="H(secret ‖ message) looks like a MAC, but Merkle–Damgård hashes leak their internal state in the digest. Knowing that digest and the message length, you can resume the hash and append your own data — forging a valid tag for secret ‖ message ‖ padding ‖ anything, with the secret never in hand.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/hash-length-extension/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="hash length extension — appending to a MAC you can&#x27;t compute — algoatson.github.io">
+<meta property="og:description" content="H(secret ‖ message) looks like a MAC, but Merkle–Damgård hashes leak their internal state in the digest. Knowing that digest and the message length, you can resume the hash and append your own data — forging a valid tag for secret ‖ message ‖ padding ‖ anything, with the secret never in hand.">
+<meta property="og:url" content="https://algoatson.github.io/p/hash-length-extension/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/hash-length-extension.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "hash length extension — appending to a MAC you can't compute", "datePublished": "2026-03-20", "dateModified": "2026-03-20", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "H(secret ‖ message) looks like a MAC, but Merkle–Damgård hashes leak their internal state in the digest. Knowing that digest and the message length, you can resume the hash and append your own data — forging a valid tag for secret ‖ message ‖ padding ‖ anything, with the secret never in hand.", "url": "https://algoatson.github.io/p/hash-length-extension/", "mainEntityOfPage": "https://algoatson.github.io/p/hash-length-extension/", "keywords": "crypto, ctf"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>hash length extension — appending to a MAC you can&#x27;t compute</h1>
+  <div class="meta"><span>2026-03-20</span><span>3 min read</span><a class="tag" href="/tags/crypto/">crypto</a> <a class="tag" href="/tags/ctf/">ctf</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/crypto-attacks/">crypto attacks</a><span class="series__pos">part 2 / 4 · ~13 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:50%"></span></div><ol class="series__list"><li><a href="/p/cbc-padding-oracle/">the CBC padding oracle — decrypting without the key</a></li><li class="cur" aria-current="true">hash length extension — appending to a MAC you can&#x27;t compute</li><li><a href="/p/rsa-attacks-tour/">a tour of RSA attacks</a></li><li><a href="/p/ecdsa-nonce-reuse/">two signatures, one nonce: recovering an ECDSA key</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#why-the-digest-is-a-resume-point">why the digest is a resume point</a></li>
+<li><a href="#doing-it">doing it</a></li>
+<li><a href="#the-fix-is-hmac">the fix is HMAC</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>A tempting homemade MAC: <code class="highlight">tag = SHA256(secret ‖ message)</code>. It looks sound — you'd
+need the secret to recompute it. But for any Merkle–Damgård hash (MD5, SHA-1, the
+SHA-2 family), the digest <em>is</em> the internal state at the end, and that's all you
+need to keep hashing from where it left off.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>construction</dt><dd>tag = H(secret ‖ message),  H ∈ {MD5, SHA-1, SHA-256, ...}</dd></div><div><dt>known</dt><dd>the message, its tag, and len(secret) (or just brute it)</dd></div><div><dt>goal</dt><dd>a valid tag for message ‖ glue-padding ‖ attacker-data — no secret</dd></div></dl></div></figure>
+<h2 id="why-the-digest-is-a-resume-point">why the digest is a resume point<a class="headerlink" href="#why-the-digest-is-a-resume-point" title="Permanent link">#</a></h2>
+<p>A Merkle–Damgård hash chops the input into fixed blocks and folds each into a
+running state with a compression function; the <strong>final state, serialized, is the
+digest</strong>. There's no finalization that mixes in a secret key — the output is just
+the chaining variable after the last block.</p>
+<p>So if you know <code class="highlight">H(secret ‖ message)</code>, you know the exact internal state the hash
+reached after consuming <code class="highlight">secret ‖ message ‖ glue_padding</code> (the padding the hash
+appended to reach a block boundary). Load that state back into the algorithm and
+keep feeding it bytes, and you compute <code class="highlight">H(secret ‖ message ‖ glue_padding ‖extension)</code> — a valid digest for a message you've extended, <strong>without ever knowing
+the secret.</strong></p>
+<figure class="codeblock"><figcaption><span class="fname">what you can forge</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#what-you-can-forge-1">1</a></span>
+<span class="normal"><a href="#what-you-can-forge-2">2</a></span>
+<span class="normal"><a href="#what-you-can-forge-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="what-you-can-forge-1">original signed bytes : secret ‖ message
+</span><span id="what-you-can-forge-2">glue padding          : the 0x80 .. 0x00 .. len bits H appended internally
+</span><span id="what-you-can-forge-3">your forgery          : message ‖ glue_padding ‖ extension      &lt;- valid tag!
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The only unknown is <code class="highlight">len(secret)</code> (it shifts the glue padding). You either know it,
+or you try lengths 0,1,2,… and submit each forgery until one is accepted.</p>
+<h2 id="doing-it">doing it<a class="headerlink" href="#doing-it" title="Permanent link">#</a></h2>
+<p>The arithmetic is fiddly (reconstructing the exact glue padding, byte-swapping the
+state into the right endianness), so the tools do it:</p>
+<figure class="codeblock"><figcaption><span class="fname">hashpump / hash_extender</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#hashpump-hash-extender-1">1</a></span>
+<span class="normal"><a href="#hashpump-hash-extender-2">2</a></span>
+<span class="normal"><a href="#hashpump-hash-extender-3">3</a></span>
+<span class="normal"><a href="#hashpump-hash-extender-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="hashpump-hash-extender-1">$ hashpump -s &lt;known_tag&gt; -d &quot;message=...&amp;role=guest&quot; \
+</span><span id="hashpump-hash-extender-2">           -k &lt;len(secret)&gt; -a &quot;&amp;role=admin&quot;
+</span><span id="hashpump-hash-extender-3">&lt;new_tag&gt;
+</span><span id="hashpump-hash-extender-4">message=...&amp;role=guest\x80\x00...\x00&lt;lenbits&gt;&amp;role=admin     # send these bytes
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<figure class="codeblock"><figcaption><span class="fname">by hand: resume from the digest</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#by-hand-resume-from-the-digest-1">1</a></span>
+<span class="normal"><a href="#by-hand-resume-from-the-digest-2">2</a></span>
+<span class="normal"><a href="#by-hand-resume-from-the-digest-3">3</a></span>
+<span class="normal"><a href="#by-hand-resume-from-the-digest-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="by-hand-resume-from-the-digest-1"><span class="n">h</span> <span class="o">=</span> <span class="n">sha256_clone_from_state</span><span class="p">(</span><span class="nb">bytes</span><span class="o">.</span><span class="n">fromhex</span><span class="p">(</span><span class="n">known_tag</span><span class="p">))</span>  <span class="c1"># load state from the digest</span>
+</span><span id="by-hand-resume-from-the-digest-2"><span class="n">h</span><span class="o">.</span><span class="n">set_length</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">secret</span><span class="p">)</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">message</span><span class="p">)</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">glue</span><span class="p">))</span>   <span class="c1"># account for what was hashed</span>
+</span><span id="by-hand-resume-from-the-digest-3"><span class="n">h</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;&amp;role=admin&quot;</span><span class="p">)</span>
+</span><span id="by-hand-resume-from-the-digest-4"><span class="n">forged_tag</span> <span class="o">=</span> <span class="n">h</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>                              <span class="c1"># valid for the extended msg</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>guest to admin, no key</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] tried secret lengths 8..20
+</span><span id="code-2">[*] len(secret)=16 accepted
+</span><span id="code-3">forged: ...&amp;role=guest&lt;glue&gt;&amp;role=admin   tag=4f2c...  -&gt; server: 200 OK, role=admin
+</span><span id="code-4">segfault{merkle_damgard_never_finalized}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<p>Last-write-wins parsers (<code class="highlight">role=guest…&amp;role=admin</code>) make the appended field override
+the original — which is why this maps so cleanly onto signed query strings and
+cookies.</p>
+<h2 id="the-fix-is-hmac">the fix is HMAC<a class="headerlink" href="#the-fix-is-hmac" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Use HMAC.</strong> <code class="highlight">HMAC(k, m) = H(k⊕opad ‖ H(k⊕ipad ‖ m))</code> hashes <em>twice</em> with the
+  key wrapping both ends, so the published tag isn't a resumable state for the outer
+  message — length extension dies.</li>
+<li><strong>Or a sponge hash.</strong> SHA-3/Keccak isn't Merkle–Damgård and isn't extendable;
+  BLAKE&#8532; have keyed modes designed for MACs.</li>
+<li><strong>Never roll <code class="highlight">H(secret ‖ message)</code>.</strong> It's the textbook footgun this attack
+  exists to punish.</li>
+</ul>
+<p>The takeaway: a hash digest is not a sealed fingerprint, it's a <strong>snapshot of a
+resumable computation</strong>. Treat <code class="highlight">H(secret ‖ m)</code> as a MAC and you've published the
+exact state an attacker needs to keep typing where your secret left off.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/writeup-static-srop/">writeup: static — no libc, no leak, just SROP</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/cbc-padding-oracle/"><span class="lbl">&#8249; prev</span>the CBC padding oracle — decrypting without the key</a><a class="next" href="/p/rsa-attacks-tour/"><span class="lbl">next &#8250;</span>a tour of RSA attacks</a></nav></main>
+
+    <footer class="status">
+      <span>64 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

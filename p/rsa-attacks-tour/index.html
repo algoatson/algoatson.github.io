@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>a tour of RSA attacks — algoatson.github.io</title>
+<meta name="description" content="RSA is sturdy; the ways people deploy it are not. A field guide to the classic breaks — tiny exponents, shared moduli, small private keys, careless primes, partial leaks — each one a parameter choice that turns &quot;factor a 2048-bit number&quot; into a few lines of arithmetic.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/rsa-attacks-tour/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="a tour of RSA attacks — algoatson.github.io">
+<meta property="og:description" content="RSA is sturdy; the ways people deploy it are not. A field guide to the classic breaks — tiny exponents, shared moduli, small private keys, careless primes, partial leaks — each one a parameter choice that turns &quot;factor a 2048-bit number&quot; into a few lines of arithmetic.">
+<meta property="og:url" content="https://algoatson.github.io/p/rsa-attacks-tour/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/rsa-attacks-tour.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "a tour of RSA attacks", "datePublished": "2026-03-25", "dateModified": "2026-03-25", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "RSA is sturdy; the ways people deploy it are not. A field guide to the classic breaks — tiny exponents, shared moduli, small private keys, careless primes, partial leaks — each one a parameter choice that turns \"factor a 2048-bit number\" into a few lines of arithmetic.", "url": "https://algoatson.github.io/p/rsa-attacks-tour/", "mainEntityOfPage": "https://algoatson.github.io/p/rsa-attacks-tour/", "keywords": "crypto, ctf, math"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>a tour of RSA attacks</h1>
+  <div class="meta"><span>2026-03-25</span><span>3 min read</span><a class="tag" href="/tags/crypto/">crypto</a> <a class="tag" href="/tags/ctf/">ctf</a> <a class="tag" href="/tags/math/">math</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/crypto-attacks/">crypto attacks</a><span class="series__pos">part 3 / 4 · ~13 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:75%"></span></div><ol class="series__list"><li><a href="/p/cbc-padding-oracle/">the CBC padding oracle — decrypting without the key</a></li><li><a href="/p/hash-length-extension/">hash length extension — appending to a MAC you can&#x27;t compute</a></li><li class="cur" aria-current="true">a tour of RSA attacks</li><li><a href="/p/ecdsa-nonce-reuse/">two signatures, one nonce: recovering an ECDSA key</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#small-public-exponent">small public exponent</a></li>
+<li><a href="#common-modulus">common modulus</a></li>
+<li><a href="#small-private-exponent-wiener">small private exponent — Wiener</a></li>
+<li><a href="#primes-chosen-badly">primes chosen badly</a></li>
+<li><a href="#partial-knowledge-coppersmith">partial knowledge — Coppersmith</a></li>
+<li><a href="#doing-it-right">doing it right</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Nobody breaks RSA by factoring a well-formed 2048-bit modulus. They break the
+<em>deployment</em>: an exponent chosen for speed, two keys that share a number, a prime
+generated badly, a few bits leaked. Each of these is a CTF staple and a real-world
+incident. Here's the field guide — match the symptom to the attack.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>scheme</dt><dd>textbook RSA — c = m^e mod n,  m = c^d mod n</dd></div><div><dt>premise</dt><dd>the maths is fine; the parameters aren&#x27;t</dd></div><div><dt>goal</dt><dd>recover m or d without factoring a sound n</dd></div></dl></div></figure>
+<h2 id="small-public-exponent">small public exponent<a class="headerlink" href="#small-public-exponent" title="Permanent link">#</a></h2>
+<p>With <code class="highlight">e = 3</code> and no padding, if the message is short enough that <code class="highlight">m^3 &lt; n</code>, the
+modulus never wraps and the ciphertext is just a perfect cube:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mi>c</mi><mo>&#x0003D;</mo><msup><mi>m</mi><mn>3</mn></msup><mo>mod</mo><mi>n</mi><mo>&#x0002C;</mo><mspace width="2em" /><msup><mi>m</mi><mn>3</mn></msup><mo>&#x0003C;</mo><mi>n</mi><mspace width="0.278em" /><mi>&#x027F9;</mi><mspace width="0.278em" /><mi>m</mi><mo>&#x0003D;</mo><mroot><mrow><mi>c</mi></mrow><mn>3</mn></mroot></mrow></math></div>
+<p>Take the integer cube root, done. And <strong>Håstad's broadcast</strong>: the same <code class="highlight">m</code> sent to
+<code class="highlight">e</code> recipients with different moduli <code class="highlight">n_1..n_e</code> lets you CRT the <code class="highlight">c_i</code> together into
+<code class="highlight">m^e mod (n_1·…·n_e)</code>; since <code class="highlight">m^e</code> is smaller than that product, an integer <code class="highlight">e</code>-th
+root recovers <code class="highlight">m</code>. Padding (OAEP) is what stops both.</p>
+<h2 id="common-modulus">common modulus<a class="headerlink" href="#common-modulus" title="Permanent link">#</a></h2>
+<p>Two users, <strong>same <code class="highlight">n</code></strong>, different coprime exponents <code class="highlight">e_1, e_2</code>, same message.
+Extended Euclid gives integers <code class="highlight">a, b</code> with <code class="highlight">a·e_1 + b·e_2 = 1</code>, and then:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><msubsup><mi>c</mi><mn>1</mn><mrow><mspace width="0.167em" /><mi>a</mi></mrow></msubsup><mspace width="0.167em" /><msubsup><mi>c</mi><mn>2</mn><mrow><mspace width="0.167em" /><mi>b</mi></mrow></msubsup><mo>&#x02261;</mo><msup><mi>m</mi><mrow><mi>a</mi><msub><mi>e</mi><mn>1</mn></msub><mo>&#x0002B;</mo><mi>b</mi><msub><mi>e</mi><mn>2</mn></msub></mrow></msup><mo>&#x0003D;</mo><msup><mi>m</mi><mrow><mn>1</mn></mrow></msup><mo>&#x0003D;</mo><mi>m</mi><mspace width="1em" /><mo>&#x00028;</mo><mi>mod</mi><mspace width="0.333em" /><mi>n</mi><mo>&#x00029;</mo></mrow></math></div>
+<p>(one of <code class="highlight">a, b</code> is negative — use the modular inverse of that ciphertext). No
+factoring; sharing a modulus across users simply breaks confidentiality.</p>
+<h2 id="small-private-exponent-wiener">small private exponent — Wiener<a class="headerlink" href="#small-private-exponent-wiener" title="Permanent link">#</a></h2>
+<p>Someone shrank <code class="highlight">d</code> to make decryption fast. If <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>d</mi><mo>&#x0003C;</mo><mstyle displaystyle="false" scriptlevel="0"><mfrac><mrow><mn>1</mn></mrow><mrow><mn>3</mn></mrow></mfrac></mstyle><msup><mi>n</mi><mrow><mn>1</mn><mo>&#x0002F;</mo><mn>4</mn></mrow></msup></mrow></math></span>, then
+<code class="highlight">e/n</code> is close enough to <code class="highlight">k/d</code> that <code class="highlight">k/d</code> appears as a <strong>convergent of the
+continued fraction</strong> expansion of <code class="highlight">e/n</code> — walk the convergents, test each as a
+candidate <code class="highlight">d</code>, and recover the private key directly. Boneh–Durfee pushes the bound
+to <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>d</mi><mo>&#x0003C;</mo><msup><mi>n</mi><mrow><mn>0.292</mn></mrow></msup></mrow></math></span> with lattices.</p>
+<h2 id="primes-chosen-badly">primes chosen badly<a class="headerlink" href="#primes-chosen-badly" title="Permanent link">#</a></h2>
+<p>The modulus is only as strong as its prime generation:</p>
+<ul>
+<li><strong>Close primes → Fermat.</strong> If <code class="highlight">|p − q|</code> is small, write <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>n</mi><mo>&#x0003D;</mo><msup><mi>a</mi><mn>2</mn></msup><mo>&#x02212;</mo><msup><mi>b</mi><mn>2</mn></msup><mo>&#x0003D;</mo><mo stretchy="false">&#x00028;</mo><mi>a</mi><mo>&#x02212;</mo><mi>b</mi><mo stretchy="false">&#x00029;</mo><mo stretchy="false">&#x00028;</mo><mi>a</mi><mo>&#x0002B;</mo><mi>b</mi><mo stretchy="false">&#x00029;</mo></mrow></math></span> and search <code class="highlight">a</code> upward from <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>&#x02308;</mi><msqrt><mrow><mi>n</mi></mrow></msqrt><mi>&#x02309;</mi></mrow></math></span> until <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mi>a</mi><mn>2</mn></msup><mo>&#x02212;</mo><mi>n</mi></mrow></math></span> is a
+  perfect square. A few iterations factor <code class="highlight">n</code>.</li>
+<li><strong>Shared primes → batch GCD.</strong> Across many keys generated with poor entropy, two
+  moduli may share a prime. Then <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mo movablelimits="true">gcd</mo><mo stretchy="false">&#x00028;</mo><msub><mi>n</mi><mn>1</mn></msub><mo>&#x0002C;</mo><msub><mi>n</mi><mn>2</mn></msub><mo stretchy="false">&#x00029;</mo><mo>&#x0003D;</mo><mi>p</mi></mrow></math></span> factors <em>both</em> instantly — a
+  single GCD, no factoring. (This has been found at scale in real Internet-wide key
+  surveys.)</li>
+<li><strong>Smooth <code class="highlight">p−1</code> → Pollard's p−1.</strong> If <code class="highlight">p−1</code> has only small factors, Pollard's
+  method peels <code class="highlight">p</code> off cheaply.</li>
+</ul>
+<h2 id="partial-knowledge-coppersmith">partial knowledge — Coppersmith<a class="headerlink" href="#partial-knowledge-coppersmith" title="Permanent link">#</a></h2>
+<p>If you leak <em>part</em> of a secret, lattices finish the job. Coppersmith's method finds
+small roots of a modular polynomial, which means: known <strong>high bits of <code class="highlight">p</code></strong> →
+factor <code class="highlight">n</code>; a <strong>stereotyped message</strong> with a small unknown part → recover <code class="highlight">m</code>;
+known high bits of <code class="highlight">d</code> → recover <code class="highlight">d</code>. The tool is LLL lattice reduction; the lesson
+is that "only a few bits leaked" is often equivalent to "all of them."</p>
+<details class="spoiler">
+<summary>diagnose, then one-line it</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span>
+<span class="normal"><a href="#code-6">6</a></span>
+<span class="normal"><a href="#code-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">e == 3 and short m         -&gt; cube root c
+</span><span id="code-2">same n, two e&#39;s            -&gt; common modulus (gcd of exponents)
+</span><span id="code-3">d tiny                     -&gt; Wiener (continued fractions of e/n)
+</span><span id="code-4">p ~ q                      -&gt; Fermat
+</span><span id="code-5">gcd(n_i, n_j) != 1         -&gt; shared prime, both keys fall
+</span><span id="code-6">high bits of p known       -&gt; Coppersmith / LLL
+</span><span id="code-7">segfault{textbook_rsa_is_a_museum_of_footguns}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="doing-it-right">doing it right<a class="headerlink" href="#doing-it-right" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Always pad.</strong> OAEP for encryption, PSS for signatures — this alone kills the
+  small-<code class="highlight">e</code>, broadcast, and most stereotyped-message attacks.</li>
+<li><strong><code class="highlight">e = 65537</code>, full-size random <code class="highlight">d</code>.</strong> No tiny exponents on either side.</li>
+<li><strong>Independent, well-seeded primes</strong> of equal-ish but not-too-close size, from a
+  CSPRNG — never reuse a modulus or a prime across keys.</li>
+</ul>
+<p>Every break here is the same story: the algorithm assumes a generic, padded
+instance, and a deployment quietly violated one assumption. When you see RSA in a
+challenge, you're not factoring — you're hunting for which assumption they broke.
+The math then takes a handful of lines, and the ones above cover most of them.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/writeup-static-srop/">writeup: static — no libc, no leak, just SROP</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-19</span><a class="row__tag" href="/tags/tooling/">tooling</a><a class="row__title" href="/p/checksec-everything/">one keybind to checksec everything</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/hash-length-extension/"><span class="lbl">&#8249; prev</span>hash length extension — appending to a MAC you can&#x27;t compute</a><a class="next" href="/p/ecdsa-nonce-reuse/"><span class="lbl">next &#8250;</span>two signatures, one nonce: recovering an ECDSA key</a></nav></main>
+
+    <footer class="status">
+      <span>64 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

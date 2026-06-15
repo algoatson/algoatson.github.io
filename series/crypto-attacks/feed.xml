@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>crypto attacks — algoatson.github.io</title>
+    <link>https://algoatson.github.io/series/crypto-attacks/</link>
+    <atom:link href="https://algoatson.github.io/series/crypto-attacks/feed.xml" rel="self" type="application/rss+xml"/>
+    <description>The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.</description>
+    <language>en</language>
+    <lastBuildDate>Mon, 15 Jun 2026 16:54:31 +0000</lastBuildDate>
+    <item>
+      <title>the CBC padding oracle — decrypting without the key</title>
+      <link>https://algoatson.github.io/p/cbc-padding-oracle/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/cbc-padding-oracle/</guid>
+      <pubDate>Wed, 18 Mar 2026 00:00:00 +0000</pubDate>
+      <category>crypto</category><category>ctf</category>
+      <description>A server that merely tells you whether a decrypted ciphertext had valid padding leaks the plaintext one byte at a time. No key, no brute force — just CBC&#x27;s structure and a single bit of feedback turned into full decryption.</description>
+    </item>
+    <item>
+      <title>hash length extension — appending to a MAC you can&#x27;t compute</title>
+      <link>https://algoatson.github.io/p/hash-length-extension/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/hash-length-extension/</guid>
+      <pubDate>Fri, 20 Mar 2026 00:00:00 +0000</pubDate>
+      <category>crypto</category><category>ctf</category>
+      <description>H(secret ‖ message) looks like a MAC, but Merkle–Damgård hashes leak their internal state in the digest. Knowing that digest and the message length, you can resume the hash and append your own data — forging a valid tag for secret ‖ message ‖ padding ‖ anything, with the secret never in hand.</description>
+    </item>
+    <item>
+      <title>a tour of RSA attacks</title>
+      <link>https://algoatson.github.io/p/rsa-attacks-tour/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/rsa-attacks-tour/</guid>
+      <pubDate>Wed, 25 Mar 2026 00:00:00 +0000</pubDate>
+      <category>crypto</category><category>ctf</category><category>math</category>
+      <description>RSA is sturdy; the ways people deploy it are not. A field guide to the classic breaks — tiny exponents, shared moduli, small private keys, careless primes, partial leaks — each one a parameter choice that turns &quot;factor a 2048-bit number&quot; into a few lines of arithmetic.</description>
+    </item>
+    <item>
+      <title>two signatures, one nonce: recovering an ECDSA key</title>
+      <link>https://algoatson.github.io/p/ecdsa-nonce-reuse/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/ecdsa-nonce-reuse/</guid>
+      <pubDate>Sun, 22 Mar 2026 00:00:00 +0000</pubDate>
+      <category>crypto</category><category>ctf</category><category>math</category>
+      <description>The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.</description>
+    </item>
+  </channel>
+</rss>

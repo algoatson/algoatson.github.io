@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/series/return-oriented-programming/feed.xml" rel="self" type="application/rss+xml"/>
     <description>A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from &quot;I control one call&quot; to &quot;I control the machine&quot;.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 15:55:02 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 16:54:31 +0000</lastBuildDate>
     <item>
       <title>ret2libc on a warm-up: stack smash to shell</title>
       <link>https://algoatson.github.io/p/ret2libc-warmup/</link>

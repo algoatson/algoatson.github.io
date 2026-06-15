@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>addrof and fakeobj — the two primitives that own a JS engine — algoatson.github.io</title>
+<meta name="description" content="Every JavaScript-engine exploit converges on the same two primitives — leak the address of an object, and forge an object at an address. Build them once from a type confusion between a float array and an object array, and the rest of the exploit is mechanical.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/addrof-fakeobj-primitives/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="addrof and fakeobj — the two primitives that own a JS engine — algoatson.github.io">
+<meta property="og:description" content="Every JavaScript-engine exploit converges on the same two primitives — leak the address of an object, and forge an object at an address. Build them once from a type confusion between a float array and an object array, and the rest of the exploit is mechanical.">
+<meta property="og:url" content="https://algoatson.github.io/p/addrof-fakeobj-primitives/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/addrof-fakeobj-primitives.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "addrof and fakeobj — the two primitives that own a JS engine", "datePublished": "2026-01-11", "dateModified": "2026-01-11", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Every JavaScript-engine exploit converges on the same two primitives — leak the address of an object, and forge an object at an address. Build them once from a type confusion between a float array and an object array, and the rest of the exploit is mechanical.", "url": "https://algoatson.github.io/p/addrof-fakeobj-primitives/", "mainEntityOfPage": "https://algoatson.github.io/p/addrof-fakeobj-primitives/", "keywords": "pwn, browser"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>addrof and fakeobj — the two primitives that own a JS engine</h1>
+  <div class="meta"><span>2026-01-11</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/browser/">browser</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/browser-exploitation/">browser exploitation</a><span class="series__pos">part 1 / 3 · ~10 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:33%"></span></div><ol class="series__list"><li class="cur" aria-current="true">addrof and fakeobj — the two primitives that own a JS engine</li><li><a href="/p/jit-type-confusion/">JIT type confusion — when the optimizer believes a lie</a></li><li><a href="/p/oob-to-arbitrary-rw/">from OOB to arbitrary R/W (and a shell)</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#doubles-and-pointers-share-storage">doubles and pointers share storage</a></li>
+<li><a href="#reinterpreting-bits">reinterpreting bits</a></li>
+<li><a href="#the-two-primitives">the two primitives</a></li>
+<li><a href="#why-its-always-these-two">why it's always these two</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Browser exploitation looks intimidating from the outside — JIT compilers, garbage
+collectors, hidden classes. But almost every modern JS-engine exploit funnels
+through the same two primitives, and once you have them the engine is effectively
+yours:</p>
+<ul>
+<li><strong><code class="highlight">addrof(obj)</code></strong> — leak the in-heap address of a JavaScript object.</li>
+<li><strong><code class="highlight">fakeobj(addr)</code></strong> — make the engine treat memory you control <em>as</em> a JS object.</li>
+</ul>
+<p>This series builds toward full arbitrary read/write; this part builds the
+foundation. Everything else is a way of obtaining, or applying, these two.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">a modern JS engine (V8 / JSC / SpiderMonkey)</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>bug</dt><dd>a type confusion between PACKED_DOUBLE and PACKED (object) array elements</dd></div><div><dt>goal</dt><dd>addrof + fakeobj</dd></div></dl></div></figure>
+<h2 id="doubles-and-pointers-share-storage">doubles and pointers share storage<a class="headerlink" href="#doubles-and-pointers-share-storage" title="Permanent link">#</a></h2>
+<p>An engine stores array elements differently depending on what's in the array. A
+<code class="highlight">[1.1, 2.2]</code> array is <code class="highlight">PACKED_DOUBLE_ELEMENTS</code> — the backing store holds raw
+IEEE-754 doubles, inline. A <code class="highlight">[{}, {}]</code> array is <code class="highlight">PACKED_ELEMENTS</code> — the backing
+store holds <em>tagged pointers</em> to objects. Same slot, two interpretations: an
+8-byte double, or an 8-byte object pointer.</p>
+<p>The entire trick is to make the engine put an <strong>object</strong> into a slot and then read
+that slot back as a <strong>double</strong> (you get the pointer bits → <code class="highlight">addrof</code>), or write a
+<strong>double</strong> and read it back as an <strong>object</strong> (the engine trusts your bits as a
+pointer → <code class="highlight">fakeobj</code>). A type-confusion bug that swaps an array's elements-kind
+without converting the backing store gives you exactly that swap.</p>
+<h2 id="reinterpreting-bits">reinterpreting bits<a class="headerlink" href="#reinterpreting-bits" title="Permanent link">#</a></h2>
+<p>You move between doubles and integers with an <code class="highlight">ArrayBuffer</code> aliased two ways:</p>
+<figure class="codeblock"><figcaption><span class="fname">float &lt;-&gt; int helpers</span><span class="lang">js</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#float---int-helpers-1">1</a></span>
+<span class="normal"><a href="#float---int-helpers-2">2</a></span>
+<span class="normal"><a href="#float---int-helpers-3">3</a></span>
+<span class="normal"><a href="#float---int-helpers-4">4</a></span>
+<span class="normal"><a href="#float---int-helpers-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="float---int-helpers-1"><span class="kd">let</span><span class="w"> </span><span class="nx">buf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nb">ArrayBuffer</span><span class="p">(</span><span class="mf">8</span><span class="p">);</span>
+</span><span id="float---int-helpers-2"><span class="kd">let</span><span class="w"> </span><span class="nx">f64</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nb">Float64Array</span><span class="p">(</span><span class="nx">buf</span><span class="p">);</span>
+</span><span id="float---int-helpers-3"><span class="kd">let</span><span class="w"> </span><span class="nx">u64</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nb">BigUint64Array</span><span class="p">(</span><span class="nx">buf</span><span class="p">);</span>
+</span><span id="float---int-helpers-4"><span class="kd">const</span><span class="w"> </span><span class="nx">ftoi</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">f</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">f64</span><span class="p">[</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">f</span><span class="p">,</span><span class="w"> </span><span class="nx">u64</span><span class="p">[</span><span class="mf">0</span><span class="p">]);</span><span class="w">     </span><span class="c1">// double bits -&gt; integer</span>
+</span><span id="float---int-helpers-5"><span class="kd">const</span><span class="w"> </span><span class="nx">itof</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">u64</span><span class="p">[</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">f64</span><span class="p">[</span><span class="mf">0</span><span class="p">]);</span><span class="w">     </span><span class="c1">// integer -&gt; double bits</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-two-primitives">the two primitives<a class="headerlink" href="#the-two-primitives" title="Permanent link">#</a></h2>
+<p>Given a bug that hands you a double-array <code class="highlight">flt</code> and an object-array <code class="highlight">obj</code> aliasing
+the <em>same</em> backing store (the confusion), the primitives fall out:</p>
+<figure class="codeblock"><figcaption><span class="fname">addrof / fakeobj from the confusion</span><span class="lang">js</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#addrof-fakeobj-from-the-confusion-1">1</a></span>
+<span class="normal"><a href="#addrof-fakeobj-from-the-confusion-2">2</a></span>
+<span class="normal"><a href="#addrof-fakeobj-from-the-confusion-3">3</a></span>
+<span class="normal"><a href="#addrof-fakeobj-from-the-confusion-4">4</a></span>
+<span class="normal"><a href="#addrof-fakeobj-from-the-confusion-5">5</a></span>
+<span class="normal"><a href="#addrof-fakeobj-from-the-confusion-6">6</a></span>
+<span class="normal"><a href="#addrof-fakeobj-from-the-confusion-7">7</a></span>
+<span class="normal"><a href="#addrof-fakeobj-from-the-confusion-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="addrof-fakeobj-from-the-confusion-1"><span class="kd">function</span><span class="w"> </span><span class="nx">addrof</span><span class="p">(</span><span class="nx">o</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="addrof-fakeobj-from-the-confusion-2"><span class="w">    </span><span class="nx">obj</span><span class="p">[</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">o</span><span class="p">;</span><span class="w">            </span><span class="c1">// store a real object pointer ...</span>
+</span><span id="addrof-fakeobj-from-the-confusion-3"><span class="hll"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">ftoi</span><span class="p">(</span><span class="nx">flt</span><span class="p">[</span><span class="mf">0</span><span class="p">]);</span><span class="w">   </span><span class="c1">// ... read the same slot as a double -&gt; its address</span>
+</span></span><span id="addrof-fakeobj-from-the-confusion-4"><span class="p">}</span>
+</span><span id="addrof-fakeobj-from-the-confusion-5"><span class="kd">function</span><span class="w"> </span><span class="nx">fakeobj</span><span class="p">(</span><span class="nx">addr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="addrof-fakeobj-from-the-confusion-6"><span class="w">    </span><span class="nx">flt</span><span class="p">[</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">itof</span><span class="p">(</span><span class="nx">addr</span><span class="p">);</span><span class="w">   </span><span class="c1">// store a controlled address as double bits ...</span>
+</span><span id="addrof-fakeobj-from-the-confusion-7"><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">obj</span><span class="p">[</span><span class="mf">0</span><span class="p">];</span><span class="w">         </span><span class="c1">// ... read it back as an object -&gt; a fake object @ addr</span>
+</span><span id="addrof-fakeobj-from-the-confusion-8"><span class="hll"><span class="p">}</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">addrof</code> leaks where an object lives; <code class="highlight">fakeobj</code> conjures an object out of an
+address you choose. Point <code class="highlight">fakeobj</code> at a buffer whose bytes you control and you've
+forged a fake <em>object header</em> — a fake array with an attacker-chosen length and
+backing-store pointer, which is the doorway to
+<a href="/p/oob-to-arbitrary-rw/">arbitrary read/write</a>.</p>
+<details class="spoiler">
+<summary>the leak that starts every JS pwn</summary>
+<figure class="codeblock"><figcaption><span class="lang">js</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1"><span class="kd">let</span><span class="w"> </span><span class="nx">o</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="nx">marker</span><span class="o">:</span><span class="w"> </span><span class="mh">0x1337</span><span class="p">};</span>
+</span><span id="code-2"><span class="nx">print</span><span class="p">(</span><span class="s2">&quot;addrof(o) = 0x&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">addrof</span><span class="p">(</span><span class="nx">o</span><span class="p">).</span><span class="nx">toString</span><span class="p">(</span><span class="mf">16</span><span class="p">));</span>
+</span><span id="code-3"><span class="c1">// addrof(o) = 0x000028a4...  -&gt; a real V8 heap pointer, leaked from a double read</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="why-its-always-these-two">why it's always these two<a class="headerlink" href="#why-its-always-these-two" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>They compose into everything.</strong> <code class="highlight">fakeobj</code> over a controlled buffer forges a
+  <code class="highlight">TypedArray</code> whose data pointer you set → read/write anywhere. <code class="highlight">addrof</code> gives you
+  the addresses to aim it at.</li>
+<li><strong>They're bug-agnostic.</strong> A <a href="/p/jit-type-confusion/">JIT typer bug</a>, an OOB
+  write, a UAF on an array — wildly different bugs all get massaged into "confuse a
+  double array with an object array," because that's the shape that yields these two.</li>
+<li><strong>They survive most mitigations.</strong> Pointer compression and the V8 sandbox change
+  the <em>representation</em> (32-bit compressed pointers, a separate heap cage), but the
+  addrof/fakeobj idea adapts; you're still leaking and forging in-heap references.</li>
+</ul>
+<p>The mental model for the whole field: a memory bug in a JS engine is only
+interesting insofar as it gets you <code class="highlight">addrof</code> and <code class="highlight">fakeobj</code>. Reach those two and you
+stop thinking about the bug — the next two parts are the same regardless of how you
+got here.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><span></span><a class="next" href="/p/jit-type-confusion/"><span class="lbl">next &#8250;</span>JIT type confusion — when the optimizer believes a lie</a></nav></main>
+
+    <footer class="status">
+      <span>64 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
