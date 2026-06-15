@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>when an integer becomes a memory bug — algoatson.github.io</title>
+<meta name="description" content="No pointer is misused, no array is indexed out of bounds — and yet the heap is corrupt. Integer overflows turn an arithmetic mistake into a memory bug one step downstream: a size that wraps to something tiny, a length that goes negative, a check that a promotion quietly defeats.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/integer-overflows-to-corruption/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="when an integer becomes a memory bug — algoatson.github.io">
+<meta property="og:description" content="No pointer is misused, no array is indexed out of bounds — and yet the heap is corrupt. Integer overflows turn an arithmetic mistake into a memory bug one step downstream: a size that wraps to something tiny, a length that goes negative, a check that a promotion quietly defeats.">
+<meta property="og:url" content="https://algoatson.github.io/p/integer-overflows-to-corruption/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/integer-overflows-to-corruption.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "when an integer becomes a memory bug", "datePublished": "2026-01-08", "dateModified": "2026-01-08", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "No pointer is misused, no array is indexed out of bounds — and yet the heap is corrupt. Integer overflows turn an arithmetic mistake into a memory bug one step downstream: a size that wraps to something tiny, a length that goes negative, a check that a promotion quietly defeats.", "url": "https://algoatson.github.io/p/integer-overflows-to-corruption/", "mainEntityOfPage": "https://algoatson.github.io/p/integer-overflows-to-corruption/", "keywords": "pwn"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>when an integer becomes a memory bug</h1>
+  <div class="meta"><span>2026-01-08</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#three-ways-the-math-betrays-you">three ways the math betrays you</a></li>
+<li><a href="#why-it-lands-as-corruption">why it lands as corruption</a></li>
+<li><a href="#the-defences">the defences</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The most deniable memory-corruption bugs don't look like memory bugs at all. The
+code allocates the size it computed and copies the length it was given — both
+"correct." The error happened earlier, in arithmetic, where a value wrapped,
+truncated, or changed sign. By the time it reaches <code class="highlight">malloc</code> or <code class="highlight">memcpy</code>, the bug is
+already baked into a perfectly innocent-looking call.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./alloc</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>bug class</dt><dd>integer overflow -&gt; undersized allocation / OOB</dd></div></dl><ul class="target__mits"><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li></ul></div></figure>
+<h2 id="three-ways-the-math-betrays-you">three ways the math betrays you<a class="headerlink" href="#three-ways-the-math-betrays-you" title="Permanent link">#</a></h2>
+<p><strong>Multiplication overflow in a size.</strong> The classic. <code class="highlight">count * size</code> wraps past
+<code class="highlight">SIZE_MAX</code>, so the allocation is tiny — then the loop writes <code class="highlight">count</code> elements into
+it:</p>
+<figure class="codeblock"><figcaption><span class="fname">undersized buffer</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#undersized-buffer-1">1</a></span>
+<span class="normal"><a href="#undersized-buffer-2">2</a></span>
+<span class="normal"><a href="#undersized-buffer-3">3</a></span>
+<span class="normal"><a href="#undersized-buffer-4">4</a></span>
+<span class="normal"><a href="#undersized-buffer-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="undersized-buffer-1"><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="nf">make</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">count</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="undersized-buffer-2"><span class="hll"><span class="w">    </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">buf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">malloc</span><span class="p">(</span><span class="n">count</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">16</span><span class="p">);</span><span class="w">     </span><span class="c1">// count=0x10000001 -&gt; 0x10 bytes (wrapped)</span>
+</span></span><span id="undersized-buffer-3"><span class="hll"><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">count</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+</span></span><span id="undersized-buffer-4"><span class="w">        </span><span class="n">buf</span><span class="p">[</span><span class="n">i</span><span class="o">*</span><span class="mi">16</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">read_byte</span><span class="p">();</span><span class="w">        </span><span class="c1">// writes far past the 0x10-byte buffer</span>
+</span><span id="undersized-buffer-5"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><strong>Signedness / negative length.</strong> A signed length passes a <code class="highlight">&lt;=</code> check while
+negative, then becomes enormous when used as an unsigned size:</p>
+<figure class="codeblock"><figcaption><span class="fname">the check that doesn&#x27;t</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-check-that-doesnt-1">1</a></span>
+<span class="normal"><a href="#the-check-that-doesnt-2">2</a></span>
+<span class="normal"><a href="#the-check-that-doesnt-3">3</a></span>
+<span class="normal"><a href="#the-check-that-doesnt-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-check-that-doesnt-1"><span class="kt">int</span><span class="w"> </span><span class="n">len</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_len</span><span class="p">();</span><span class="w">                    </span><span class="c1">// attacker sends -1</span>
+</span><span id="the-check-that-doesnt-2"><span class="hll"><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">len</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">MAX</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">                       </span><span class="c1">// -1 &lt;= MAX is TRUE</span>
+</span></span><span id="the-check-that-doesnt-3"><span class="hll"><span class="w">    </span><span class="n">memcpy</span><span class="p">(</span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">len</span><span class="p">);</span><span class="w">              </span><span class="c1">// len -&gt; (size_t)-1 = huge copy</span>
+</span></span><span id="the-check-that-doesnt-4"><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><strong>Truncation.</strong> A 64-bit length stored into a 32- or 16-bit field loses its high
+bits. The bounds check runs on the wide value; the copy uses the narrow one (or
+vice-versa), and the two disagree.</p>
+<h2 id="why-it-lands-as-corruption">why it lands as corruption<a class="headerlink" href="#why-it-lands-as-corruption" title="Permanent link">#</a></h2>
+<p>There's no out-of-bounds <em>expression</em> anywhere — the OOB is emergent. The
+allocation believes one size, the population believes another, and the gap between
+them is your overflow. For the multiplication case, picking <code class="highlight">count</code> so that
+<code class="highlight">count * 16 mod 2^64</code> is small but <code class="highlight">count</code> is large gives a heap overflow whose
+length you control:</p>
+<figure class="codeblock"><figcaption><span class="fname">trigger.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#triggerpy-1">1</a></span>
+<span class="normal"><a href="#triggerpy-2">2</a></span>
+<span class="normal"><a href="#triggerpy-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="triggerpy-1"><span class="n">count</span> <span class="o">=</span> <span class="mh">0x1000000000000001</span>        <span class="c1"># *16 wraps to 0x10; loop still runs 2^60+ times</span>
+</span><span id="triggerpy-2"><span class="c1"># in practice you choose count so the wrapped size is a clean chunk and the</span>
+</span><span id="triggerpy-3"><span class="c1"># loop writes exactly into the next chunk&#39;s header -&gt; classic heap overflow</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>From there it's an ordinary heap overflow — corrupt the next chunk's size, or its
+<code class="highlight">fd</code>, and you're back in <a href="/p/tcache-poisoning-explained/">tcache poisoning</a> or
+unsorted-bin territory.</p>
+<details class="spoiler">
+<summary>the allocation was 'right' the whole time</summary>
+<p><code class="highlight">malloc</code> got exactly the (wrapped) number it was handed; the bug was three lines
+upstream, in a multiply:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{0x10000001_times_16_is_not_what_you_think}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="the-defences">the defences<a class="headerlink" href="#the-defences" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Checked arithmetic.</strong> <code class="highlight">__builtin_mul_overflow(count, size, &amp;n)</code> and friends turn
+  the wrap into a detectable error; <code class="highlight">calloc(count, size)</code> does this check for you —
+  prefer it over <code class="highlight">malloc(count*size)</code>.</li>
+<li><strong><code class="highlight">size_t</code> everywhere, and check <em>after</em> promotion.</strong> Mixing <code class="highlight">int</code>/<code class="highlight">size_t</code>
+  invites the signed-negative-becomes-huge bug; validate the value in the type it'll
+  be <em>used</em> as.</li>
+<li><strong><code class="highlight">-fsanitize=integer,undefined</code></strong> in testing catches wraps and bad conversions at
+  runtime; <code class="highlight">-Wconversion</code> flags the truncations at compile time.</li>
+</ul>
+<p>The lesson: bounds checks protect the <em>access</em>, but the bug is often in the
+<em>arithmetic that feeds the access</em>. Audit every <code class="highlight">a * b</code>, every signed-to-unsigned
+boundary, every assignment into a narrower type — those are where a memory-safety
+bug hides inside code that never touches a pointer wrong.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/ret2csu-universal-gadget/"><span class="lbl">&#8249; newer</span>ret2csu — the universal gadget hiding in every binary</a><a class="next" href="/p/this-site-is-a-folder-of-text-files/"><span class="lbl">older &#8250;</span>this site is a folder of text files</a></nav></main>
+
+    <footer class="status">
+      <span>52 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

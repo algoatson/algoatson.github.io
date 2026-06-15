@@ -26,6 +26,7 @@
   <url><loc>https://algoatson.github.io/p/rizin-radare2-in-anger/</loc><lastmod>2026-06-02</lastmod></url>
   <url><loc>https://algoatson.github.io/p/stack-pivoting/</loc><lastmod>2026-05-30</lastmod></url>
   <url><loc>https://algoatson.github.io/p/pwntools-cookbook/</loc><lastmod>2026-05-26</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/writeup-static-srop/</loc><lastmod>2026-05-26</lastmod></url>
   <url><loc>https://algoatson.github.io/p/srop-one-syscall-every-register/</loc><lastmod>2026-05-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/checksec-everything/</loc><lastmod>2026-05-19</lastmod></url>
   <url><loc>https://algoatson.github.io/p/writeup-notekeeper-uaf/</loc><lastmod>2026-05-18</lastmod></url>
@@ -37,10 +38,12 @@
   <url><loc>https://algoatson.github.io/p/userfaultfd-fuse-race-windows/</loc><lastmod>2026-04-20</lastmod></url>
   <url><loc>https://algoatson.github.io/p/kernel-lpe-commit-creds/</loc><lastmod>2026-04-12</lastmod></url>
   <url><loc>https://algoatson.github.io/p/anti-debug-bingo/</loc><lastmod>2026-04-09</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/cpp-vtable-hijacking-type-confusion/</loc><lastmod>2026-04-05</lastmod></url>
   <url><loc>https://algoatson.github.io/p/afl-harness-a-parser/</loc><lastmod>2026-03-28</lastmod></url>
   <url><loc>https://algoatson.github.io/p/ecdsa-nonce-reuse/</loc><lastmod>2026-03-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/the-stack-canary-from-the-source/</loc><lastmod>2026-03-15</lastmod></url>
   <url><loc>https://algoatson.github.io/p/flush-reload-cache-side-channel/</loc><lastmod>2026-03-08</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/unpacking-a-packed-binary/</loc><lastmod>2026-02-26</lastmod></url>
   <url><loc>https://algoatson.github.io/p/printf-is-a-write-primitive/</loc><lastmod>2026-02-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/defeating-obfuscation-mba/</loc><lastmod>2026-02-14</lastmod></url>
   <url><loc>https://algoatson.github.io/p/slab-uaf-modprobe/</loc><lastmod>2026-02-16</lastmod></url>
@@ -51,6 +54,7 @@
   <url><loc>https://algoatson.github.io/p/one-gadget-constraints/</loc><lastmod>2026-01-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/tcache-poisoning-explained/</loc><lastmod>2026-01-18</lastmod></url>
   <url><loc>https://algoatson.github.io/p/ret2csu-universal-gadget/</loc><lastmod>2026-01-15</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/integer-overflows-to-corruption/</loc><lastmod>2026-01-08</lastmod></url>
   <url><loc>https://algoatson.github.io/p/this-site-is-a-folder-of-text-files/</loc><lastmod>2026-01-05</lastmod></url>
   <url><loc>https://algoatson.github.io/p/advent-of-pwn/</loc><lastmod>2026-06-13</lastmod></url>
   <url><loc>https://algoatson.github.io/about/</loc></url>
@@ -77,8 +81,8 @@
   <url><loc>https://algoatson.github.io/tags/math/</loc></url>
   <url><loc>https://algoatson.github.io/tags/side-channel/</loc></url>
   <url><loc>https://algoatson.github.io/tags/research/</loc></url>
-  <url><loc>https://algoatson.github.io/tags/fmtstr/</loc></url>
   <url><loc>https://algoatson.github.io/tags/obfuscation/</loc></url>
+  <url><loc>https://algoatson.github.io/tags/fmtstr/</loc></url>
   <url><loc>https://algoatson.github.io/tags/vm/</loc></url>
   <url><loc>https://algoatson.github.io/tags/shellcode/</loc></url>
   <url><loc>https://algoatson.github.io/tags/site/</loc></url>

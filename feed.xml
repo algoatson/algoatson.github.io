@@ -4,9 +4,9 @@
     <title>algoatson.github.io</title>
     <link>https://algoatson.github.io/</link>
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>A UAF that needs you to reallocate in a microsecond window is a coin flip — unless you can pause the kernel mid-copy. userfaultfd (and FUSE, when it&#x27;s locked down) let a page fault block in your own handler, stretching a hopeless race into a step you control.</description>
+    <description>A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 15:25:34 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 15 Jun 2026 15:29:11 +0000</lastBuildDate>
     <item>
       <title>House of Apple 2 — FSOP after the hooks died</title>
       <link>https://algoatson.github.io/p/house-of-apple-2/</link>
@@ -176,6 +176,14 @@
       <description>The pwntools I reach for from memory — the template, tubes, packing, the ELF/libc helpers, format-string and shellcode one-liners, and the CLI subcommands that replace a pile of little scripts. Real snippets, copy-paste shaped.</description>
     </item>
     <item>
+      <title>writeup: static — no libc, no leak, just SROP</title>
+      <link>https://algoatson.github.io/p/writeup-static-srop/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/writeup-static-srop/</guid>
+      <pubDate>Tue, 26 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category><category>ctf</category>
+      <description>A stripped, statically-linked binary with a stack overflow and almost nothing else — no PLT, no libc to leak, barely any gadgets. The way out is to write &quot;/bin/sh&quot; with a read, then chain two forged sigreturn frames into an execve. A clean SROP from recon to shell.</description>
+    </item>
+    <item>
       <title>SROP — one syscall, every register</title>
       <link>https://algoatson.github.io/p/srop-one-syscall-every-register/</link>
       <guid isPermaLink="true">https://algoatson.github.io/p/srop-one-syscall-every-register/</guid>
@@ -238,14 +246,6 @@
       <pubDate>Wed, 22 Apr 2026 00:00:00 +0000</pubDate>
       <category>re</category><category>tooling</category><category>linux</category>
       <description>A fixed triage I run on every new binary before I open a disassembler — identify, enumerate, watch it run. The exact commands, in order, and what each one is actually telling you.</description>
-    </item>
-    <item>
-      <title>userfaultfd &amp; FUSE — freezing a race until it&#x27;s deterministic</title>
-      <link>https://algoatson.github.io/p/userfaultfd-fuse-race-windows/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/userfaultfd-fuse-race-windows/</guid>
-      <pubDate>Mon, 20 Apr 2026 00:00:00 +0000</pubDate>
-      <category>kernel</category><category>pwn</category>
-      <description>A UAF that needs you to reallocate in a microsecond window is a coin flip — unless you can pause the kernel mid-copy. userfaultfd (and FUSE, when it&#x27;s locked down) let a page fault block in your own handler, stretching a hopeless race into a step you control.</description>
     </item>
   </channel>
 </rss>

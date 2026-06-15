@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>C++ vtable hijacking and type confusion — algoatson.github.io</title>
+<meta name="description" content="A C++ object with virtual methods carries a pointer to its vtable as its first field. Overwrite that pointer — via an overflow, a UAF, or a bad cast — and the next virtual call jumps wherever you say, with the object as the first argument. The mechanism behind a huge share of browser and engine exploits.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/cpp-vtable-hijacking-type-confusion/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="C++ vtable hijacking and type confusion — algoatson.github.io">
+<meta property="og:description" content="A C++ object with virtual methods carries a pointer to its vtable as its first field. Overwrite that pointer — via an overflow, a UAF, or a bad cast — and the next virtual call jumps wherever you say, with the object as the first argument. The mechanism behind a huge share of browser and engine exploits.">
+<meta property="og:url" content="https://algoatson.github.io/p/cpp-vtable-hijacking-type-confusion/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/cpp-vtable-hijacking-type-confusion.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "C++ vtable hijacking and type confusion", "datePublished": "2026-04-05", "dateModified": "2026-04-05", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A C++ object with virtual methods carries a pointer to its vtable as its first field. Overwrite that pointer — via an overflow, a UAF, or a bad cast — and the next virtual call jumps wherever you say, with the object as the first argument. The mechanism behind a huge share of browser and engine exploits.", "url": "https://algoatson.github.io/p/cpp-vtable-hijacking-type-confusion/", "mainEntityOfPage": "https://algoatson.github.io/p/cpp-vtable-hijacking-type-confusion/", "keywords": "pwn"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>C++ vtable hijacking and type confusion</h1>
+  <div class="meta"><span>2026-04-05</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-layout-that-makes-it-possible">the layout that makes it possible</a></li>
+<li><a href="#hijacking-the-vptr">hijacking the vptr</a></li>
+<li><a href="#the-defences-and-why-this-is-still-everywhere">the defences, and why this is still everywhere</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>C-style heap bugs end at <code class="highlight">__free_hook</code> or a saved return address. C++ hands you a
+richer target: every polymorphic object is, at its first 8 bytes, a <em>function-
+pointer table pointer</em>. Corrupt that and you don't need a hook — the program's own
+virtual dispatch calls your code for you.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./engine</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>language</dt><dd>C++ (virtual methods)</dd></div><div><dt>bug</dt><dd>UAF on a polymorphic object -&gt; control its vptr</dd></div></dl></div></figure>
+<h2 id="the-layout-that-makes-it-possible">the layout that makes it possible<a class="headerlink" href="#the-layout-that-makes-it-possible" title="Permanent link">#</a></h2>
+<p>An object of a class with virtual methods begins with a <strong>vptr</strong> — a pointer to its
+class's vtable, an array of function pointers. A virtual call compiles to a double
+indirection through it:</p>
+<figure class="codeblock"><figcaption><span class="fname">obj-&gt;draw()  becomes</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#obj-draw-becomes-1">1</a></span>
+<span class="normal"><a href="#obj-draw-becomes-2">2</a></span>
+<span class="normal"><a href="#obj-draw-becomes-3">3</a></span>
+<span class="normal"><a href="#obj-draw-becomes-4">4</a></span>
+<span class="normal"><a href="#obj-draw-becomes-5">5</a></span>
+<span class="normal"><a href="#obj-draw-becomes-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="obj-draw-becomes-1">obj           -&gt; [ vptr ][ field a ][ field b ] ...
+</span><span id="obj-draw-becomes-2">vptr          -&gt; [ &amp;type_info ][ &amp;Shape::area ][ &amp;Shape::draw ] ...   (the vtable)
+</span><span id="obj-draw-becomes-3">call:  mov rax,[obj]        ; rax = vptr
+</span><span id="obj-draw-becomes-4">       mov rdx,[rax + 0x10] ; rdx = vtable[2] = &amp;draw
+</span><span id="obj-draw-becomes-5">       mov rdi, obj         ; `this` is the first argument
+</span><span id="obj-draw-becomes-6">       call rdx
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Two facts fall out: the dispatch trusts whatever <code class="highlight">[obj]</code> points at, and it always
+calls with <code class="highlight">this</code> (the object) in <code class="highlight">rdi</code>. So if you control the object's bytes, you
+control both the call target <em>and</em> its first argument.</p>
+<h2 id="hijacking-the-vptr">hijacking the vptr<a class="headerlink" href="#hijacking-the-vptr" title="Permanent link">#</a></h2>
+<p>The vtable itself lives in read-only memory, but the <strong>vptr inside the object</strong> is
+on the heap and writable. Three common ways to own it:</p>
+<ul>
+<li><strong>UAF + reclaim.</strong> Free a polymorphic object, leave a dangling reference, then
+  allocate attacker data into the same chunk so your bytes land where the vptr was.
+  Then trigger a virtual call. (The browser-exploit staple.)</li>
+<li><strong>Heap overflow into an adjacent object.</strong> Overflow a buffer that sits before an
+  object and overwrite its vptr.</li>
+<li><strong>Type confusion.</strong> Get the code to treat type <code class="highlight">A</code> as type <code class="highlight">B</code> (a bad
+  <code class="highlight">static_cast</code>, a union mismatch, a deserialization bug). <code class="highlight">B</code>'s virtual call reads
+  a <code class="highlight">vptr</code> slot that, in <code class="highlight">A</code>, is attacker-controlled data.</li>
+</ul>
+<p>Point the vptr at a <strong>fake vtable</strong> you've staged in known memory, whose called
+slot holds the address you want, and arrange the object's start to be a shell
+string (since <code class="highlight">this</code>/<code class="highlight">rdi</code> points at the object):</p>
+<figure class="codeblock"><figcaption><span class="fname">vhijack.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#vhijackpy-1">1</a></span>
+<span class="normal"><a href="#vhijackpy-2">2</a></span>
+<span class="normal"><a href="#vhijackpy-3">3</a></span>
+<span class="normal"><a href="#vhijackpy-4">4</a></span>
+<span class="normal"><a href="#vhijackpy-5">5</a></span>
+<span class="normal"><a href="#vhijackpy-6">6</a></span>
+<span class="normal"><a href="#vhijackpy-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="vhijackpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="vhijackpy-2"><span class="n">libc_base</span> <span class="o">=</span> <span class="n">leak</span><span class="p">()</span>                       <span class="c1"># need a libc leak for system + the fake table addr</span>
+</span><span id="vhijackpy-3">
+</span><span id="vhijackpy-4"><span class="n">fake_vtable</span> <span class="o">=</span> <span class="n">bss</span> <span class="o">+</span> <span class="mh">0x40</span>                 <span class="c1"># somewhere we control, address known</span>
+</span><span id="vhijackpy-5"><span class="hll"><span class="n">forge</span><span class="p">(</span><span class="n">fake_vtable</span><span class="p">,</span> <span class="n">slot_for_draw</span> <span class="o">=</span> <span class="n">libc_base</span> <span class="o">+</span> <span class="n">libc</span><span class="o">.</span><span class="n">sym</span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">])</span>
+</span></span><span id="vhijackpy-6"><span class="hll"><span class="n">reclaim_uaf</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">data</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;/bin/sh</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">ljust</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span><span class="sa">b</span><span class="s2">&quot;</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">p64</span><span class="p">(</span><span class="n">fake_vtable</span><span class="p">))</span>
+</span></span><span id="vhijackpy-7"><span class="hll"><span class="n">trigger_virtual_call</span><span class="p">(</span><span class="n">obj</span><span class="p">)</span>                <span class="c1"># draw() -&gt; system(this) -&gt; system(&quot;/bin/sh&quot;)</span>
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>virtual dispatch called system for me</summary>
+<p>The object's first 8 bytes were <code class="highlight">&quot;/bin/sh&quot;</code>, its vptr pointed at my table, and
+<code class="highlight">obj-&gt;draw()</code> did <code class="highlight">system(this)</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">segfault{this_is_in_rdi}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="the-defences-and-why-this-is-still-everywhere">the defences, and why this is still everywhere<a class="headerlink" href="#the-defences-and-why-this-is-still-everywhere" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>CFI (Control-Flow Integrity).</strong> Clang's <code class="highlight">-fsanitize=cfi-vcall</code> verifies, before
+  each virtual call, that the vptr points at a vtable <em>valid for that static type</em>.
+  A forged or wrong-type table aborts. The strongest mitigation here.</li>
+<li><strong>CET / IBT</strong> (<a href="/p/cet-shadow-stack-ibt/">covered</a>) requires the indirect call to
+  land on an <code class="highlight">endbr64</code> — so you can still jump to a real function entry, just not a
+  mid-function gadget. <strong>PAC</strong> (on Apple) signs vtable pointers.</li>
+<li><strong>But the bug class persists.</strong> Without CFI, vptr hijack is clean and reliable,
+  which is why type confusion and UAF-on-objects dominate browser and language-VM
+  exploitation. The mitigations narrow <em>what you can call</em>; they rarely remove the
+  corrupted-vptr primitive itself.</li>
+</ul>
+<p>The shift in mindset from C to C++ exploitation: stop hunting for a hook to
+overwrite and start hunting for an <strong>object whose vptr you can control</strong>. The
+language scatters indirect-call sites through every polymorphic type — each one is
+a redirect waiting for a vptr you own.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/anti-debug-bingo/"><span class="lbl">&#8249; newer</span>anti-debug bingo: five checks and how they fall</a><a class="next" href="/p/afl-harness-a-parser/"><span class="lbl">older &#8250;</span>fuzzing a parser with AFL++, harness first</a></nav></main>
+
+    <footer class="status">
+      <span>52 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

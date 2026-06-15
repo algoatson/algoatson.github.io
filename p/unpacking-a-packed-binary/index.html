@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>unpacking by hand — finding OEP and dumping — algoatson.github.io</title>
+<meta name="description" content="A packer ships a tiny stub and a blob; at runtime the stub unrolls the real program into memory and jumps to it. upx -d handles the honest case. When the headers are tampered, you do it the timeless way: run it, break right after the unpack, find the original entry point, and dump the process from memory.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/unpacking-a-packed-binary/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="unpacking by hand — finding OEP and dumping — algoatson.github.io">
+<meta property="og:description" content="A packer ships a tiny stub and a blob; at runtime the stub unrolls the real program into memory and jumps to it. upx -d handles the honest case. When the headers are tampered, you do it the timeless way: run it, break right after the unpack, find the original entry point, and dump the process from memory.">
+<meta property="og:url" content="https://algoatson.github.io/p/unpacking-a-packed-binary/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/unpacking-a-packed-binary.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "unpacking by hand — finding OEP and dumping", "datePublished": "2026-02-26", "dateModified": "2026-02-26", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A packer ships a tiny stub and a blob; at runtime the stub unrolls the real program into memory and jumps to it. upx -d handles the honest case. When the headers are tampered, you do it the timeless way: run it, break right after the unpack, find the original entry point, and dump the process from memory.", "url": "https://algoatson.github.io/p/unpacking-a-packed-binary/", "mainEntityOfPage": "https://algoatson.github.io/p/unpacking-a-packed-binary/", "keywords": "re, obfuscation"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>unpacking by hand — finding OEP and dumping</h1>
+  <div class="meta"><span>2026-02-26</span><span>3 min read</span><a class="tag" href="/tags/re/">re</a> <a class="tag" href="/tags/obfuscation/">obfuscation</a></div>
+</header>
+
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#first-rule-out-the-easy-case">first, rule out the easy case</a></li>
+<li><a href="#find-the-oep-follow-the-stub-to-its-tail-jump">find the OEP: follow the stub to its tail jump</a></li>
+<li><a href="#dump-and-rebuild">dump and rebuild</a></li>
+<li><a href="#and-the-anti-unpacking-itll-throw-at-you">and the anti-unpacking it'll throw at you</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Open a packed binary in a disassembler and there's almost nothing there — a few
+hundred bytes of stub, a high-entropy blob, and an entry point that doesn't lead to
+any recognisable code. The real program only exists at runtime, after the stub
+decompresses it into memory and jumps to the <strong>original entry point</strong> (OEP). To
+analyse it statically, you have to be there at that jump and take a snapshot.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">./packed</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>entropy</dt><dd>~7.9 bits/byte (compressed/encrypted body)</dd></div><div><dt>sections</dt><dd>tiny .text stub + one big rwx blob</dd></div><div><dt>goal</dt><dd>recover the unpacked program at its OEP</dd></div></dl></div></figure>
+<h2 id="first-rule-out-the-easy-case">first, rule out the easy case<a class="headerlink" href="#first-rule-out-the-easy-case" title="Permanent link">#</a></h2>
+<p>Honest UPX round-trips:</p>
+<figure class="codeblock"><figcaption><span class="fname">try the obvious</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#try-the-obvious-1">1</a></span>
+<span class="normal"><a href="#try-the-obvious-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="try-the-obvious-1">$ upx -d packed -o unpacked          # works on unmodified UPX
+</span><span id="try-the-obvious-2">$ strings packed | grep -i upx       # UPX!/version present? -&gt; probably standard
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>When that fails — and on CTF binaries it usually does, because the <code class="highlight">UPX!</code> magic and
+the header fields get scribbled over to break <code class="highlight">upx -d</code> — you unpack the way that
+works on <em>any</em> packer, including custom ones: dynamically.</p>
+<h2 id="find-the-oep-follow-the-stub-to-its-tail-jump">find the OEP: follow the stub to its tail jump<a class="headerlink" href="#find-the-oep-follow-the-stub-to-its-tail-jump" title="Permanent link">#</a></h2>
+<p>The stub does its work, then transfers control to the freshly-unpacked code with a
+<strong>tail jump</strong> — a jump to an address far from the stub, often right after a
+register-restore. Recognising it is the whole skill:</p>
+<figure class="codeblock"><figcaption><span class="fname">the classic UPX tail at the end of the stub</span><span class="lang">asm</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-classic-upx-tail-at-the-end-of-the-stub-1">1</a></span>
+<span class="normal"><a href="#the-classic-upx-tail-at-the-end-of-the-stub-2">2</a></span>
+<span class="normal"><a href="#the-classic-upx-tail-at-the-end-of-the-stub-3">3</a></span>
+<span class="normal"><a href="#the-classic-upx-tail-at-the-end-of-the-stub-4">4</a></span>
+<span class="normal"><a href="#the-classic-upx-tail-at-the-end-of-the-stub-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-classic-upx-tail-at-the-end-of-the-stub-1"><span class="na">...</span>
+</span><span id="the-classic-upx-tail-at-the-end-of-the-stub-2"><span class="nf">pop</span><span class="w">  </span><span class="no">rdi</span>
+</span><span id="the-classic-upx-tail-at-the-end-of-the-stub-3"><span class="na">...</span>
+</span><span id="the-classic-upx-tail-at-the-end-of-the-stub-4"><span class="nf">lea</span><span class="w">  </span><span class="no">rax</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="no">rip</span><span class="w"> </span><span class="p">-</span><span class="w"> </span><span class="mi">0</span><span class="no">x...</span><span class="p">]</span>
+</span><span id="the-classic-upx-tail-at-the-end-of-the-stub-5"><span class="nf">jmp</span><span class="w">  </span><span class="no">rax</span><span class="w">            </span><span class="c1">; &lt;- tail jump into the unpacked .text (the OEP)</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Break there and single-step into it; you land on what looks like a normal program
+entry (a <code class="highlight">_start</code>/<code class="highlight">__libc_start_main</code> setup). Generic ways to catch the moment:</p>
+<ul>
+<li><strong>Hardware breakpoint on the unpacked region.</strong> Mark the rwx blob and break on
+  <em>execute</em> — you stop the instant the stub jumps into decompressed code.</li>
+<li><strong>Break after the big write loop.</strong> The decompressor is a tight copy loop; set a
+  breakpoint just past it.</li>
+<li><strong>Watch entropy / <code class="highlight">mprotect</code>.</strong> Many packers <code class="highlight">mprotect</code> the unpacked region
+  executable just before the jump — break on that syscall.</li>
+</ul>
+<figure class="codeblock"><figcaption><span class="fname">catching OEP in gdb</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#catching-oep-in-gdb-1">1</a></span>
+<span class="normal"><a href="#catching-oep-in-gdb-2">2</a></span>
+<span class="normal"><a href="#catching-oep-in-gdb-3">3</a></span>
+<span class="normal"><a href="#catching-oep-in-gdb-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="catching-oep-in-gdb-1">(gdb) starti
+</span><span id="catching-oep-in-gdb-2">(gdb) # let the stub run; break on execute of the unpacked mapping
+</span><span id="catching-oep-in-gdb-3">(gdb) info proc mappings            # find the rwx blob&#39;s range
+</span><span id="catching-oep-in-gdb-4">(gdb) # OEP = where execution enters that range after the tail jump
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="dump-and-rebuild">dump and rebuild<a class="headerlink" href="#dump-and-rebuild" title="Permanent link">#</a></h2>
+<p>At OEP, the real program is sitting decompressed in memory. Snapshot it:</p>
+<figure class="codeblock"><figcaption><span class="fname">dump the live image</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#dump-the-live-image-1">1</a></span>
+<span class="normal"><a href="#dump-the-live-image-2">2</a></span>
+<span class="normal"><a href="#dump-the-live-image-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="dump-the-live-image-1">(gdb) info proc mappings
+</span><span id="dump-the-live-image-2">(gdb) dump memory oep_dump.bin 0x&lt;start&gt; 0x&lt;end&gt;     # grab the unpacked text/data
+</span><span id="dump-the-live-image-3"># or core it: gcore &lt;pid&gt;, then carve sections out of the core
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>The dump runs, but a <em>static</em> tool still chokes until you fix two things up: set the
+ELF entry point to the OEP you found, and repair the imports — packers resolve the
+GOT/PLT at runtime, so a from-memory dump has the <em>resolved</em> pointers, which you
+re-point at proper relocation entries (the ELF equivalent of IAT reconstruction).</p>
+<details class="spoiler">
+<summary>the unpacked OEP</summary>
+<p>After the tail jump, the entry resolves to ordinary code — <code class="highlight">main</code> is reachable,
+strings are back, the disassembler has something to chew on:
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">OEP = 0x401d20
+</span><span id="code-2">[+] dumped 0x3000 bytes of unpacked .text
+</span><span id="code-3">segfault{i_followed_the_tail_jump}
+</span></code></pre></div></td></tr></table></div>
+</figure></p>
+</details>
+<h2 id="and-the-anti-unpacking-itll-throw-at-you">and the anti-unpacking it'll throw at you<a class="headerlink" href="#and-the-anti-unpacking-itll-throw-at-you" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Anti-debug in the stub</strong> — <code class="highlight">ptrace(PTRACE_TRACEME)</code>, timing checks, <code class="highlight">/proc</code>
+  self-inspection. Defeat them exactly as in <a href="/p/anti-debug-bingo/">anti-debug</a>:
+  <code class="highlight">LD_PRELOAD</code> a fake <code class="highlight">ptrace</code>, or patch the check.</li>
+<li><strong>Self-checksums / re-packing</strong> — the stub may re-encrypt regions after use; dump
+  at the <em>exact</em> OEP moment, before it cleans up.</li>
+<li><strong>Stolen bytes</strong> — some packers move the first few OEP instructions into the stub
+  and run them there, so the dumped OEP is missing its head; recover them from the
+  stub and prepend.</li>
+</ul>
+<p>Unpacking is the same dance regardless of the packer: let it do the work it was
+built to do, freeze the program the instant the real code exists, and walk away
+with the snapshot. <code class="highlight">upx -d</code> is a convenience; the OEP-and-dump method is the one
+that never stops working.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-02-14</span><a class="row__tag" href="/tags/re/">re</a><a class="row__title" href="/p/defeating-obfuscation-mba/">defeating obfuscation — MBA, opaque predicates, flattening</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-02-09</span><a class="row__tag" href="/tags/re/">re</a><a class="row__title" href="/p/devirtualizing-a-toy-vm/">devirtualizing a toy VM obfuscator</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-02</span><a class="row__tag" href="/tags/re/">re</a><a class="row__title" href="/p/rizin-radare2-in-anger/">rizin and radare2 in anger</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/flush-reload-cache-side-channel/"><span class="lbl">&#8249; newer</span>FLUSH+RELOAD — reading secrets through the cache</a><a class="next" href="/p/printf-is-a-write-primitive/"><span class="lbl">older &#8250;</span>printf is a write primitive</a></nav></main>
+
+    <footer class="status">
+      <span>52 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>
