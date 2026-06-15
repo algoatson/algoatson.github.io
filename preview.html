@@ -499,6 +499,9 @@ aside.toc .toc { border: 0; padding: 0; background: transparent; }  /* inner md 
 .series__list li.cur { color: var(--ink); font-weight: 600;
   box-shadow: inset 2px 0 0 var(--accent); }   /* "you are here" accent bar */
 .series__list li.cur::before { color: var(--accent); }
+/* no resting underline on part links — a 14-row stack of underlines is noisy; the
+   accent-inverse hover still signals they're links. */
+.series__list a { border-bottom: 0; }
 
 /* ---- collapsible details / spoiler flag blocks --------------------------- */
 .prose details {
