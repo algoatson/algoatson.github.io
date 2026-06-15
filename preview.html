@@ -492,7 +492,7 @@ aside.toc .toc { border: 0; padding: 0; background: transparent; }  /* inner md 
 .series__list li { counter-increment: sx; margin: 3px 0; padding-left: 7px;
   break-inside: avoid; display: flex; align-items: baseline; }
 .series__list li::before { content: counter(sx) "."; flex: 0 0 1.9em;
-  margin-right: .6em; text-align: right; color: var(--faint); }
+  margin-right: .6em; text-align: right; color: var(--dim); }
 .series__list li.cur { color: var(--ink); font-weight: 600;
   box-shadow: inset 2px 0 0 var(--accent); }   /* "you are here" accent bar */
 .series__list li.cur::before { color: var(--accent); }
@@ -541,7 +541,7 @@ aside.toc .toc { border: 0; padding: 0; background: transparent; }  /* inner md 
 .pager a { border: 0; color: var(--dim); max-width: 46%; }
 .pager a:hover { color: var(--void); background: var(--accent); }
 .pager .next { margin-left: auto; text-align: right; }
-.pager .lbl { display: block; color: var(--faint); font-family: var(--font-vga); font-size: 11px; }
+.pager .lbl { display: block; color: var(--dim); font-family: var(--font-vga); font-size: 11px; }
 
 /* numbered index pager (overrides the space-between flex of .pager) */
 .pager--num { justify-content: center; align-items: baseline; gap: 4px; }
