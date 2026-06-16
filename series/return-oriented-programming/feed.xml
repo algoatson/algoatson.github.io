@@ -4,9 +4,9 @@
     <title>return-oriented programming — algoatson.github.io</title>
     <link>https://algoatson.github.io/series/return-oriented-programming/</link>
     <atom:link href="https://algoatson.github.io/series/return-oriented-programming/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from &quot;I control one call&quot; to &quot;I control the machine&quot;.</description>
+    <description>A remote service with a stack overflow, that forks per connection, and that you have no binary for. Blind ROP turns the only feedback you have — does the connection crash or not — into an oracle, and reads the canary, finds gadgets, and dumps the binary over the socket. The most elegant trick in the ROP toolkit.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 16:54:31 +0000</lastBuildDate>
+    <lastBuildDate>Tue, 16 Jun 2026 02:38:36 +0000</lastBuildDate>
     <item>
       <title>ret2libc on a warm-up: stack smash to shell</title>
       <link>https://algoatson.github.io/p/ret2libc-warmup/</link>
@@ -70,6 +70,14 @@
       <pubDate>Sun, 31 May 2026 00:00:00 +0000</pubDate>
       <category>pwn</category><category>rop</category><category>internals</category>
       <description>A single controlled call — from a hook, an FSOP vtable, a function pointer — sets one register and jumps once. setcontext turns that into everything: it restores rsp and the whole register file from a struct you point it at, converting one redirect into a full pivot. The modern bridge from &quot;I control one call&quot; to &quot;I control the machine&quot;.</description>
+    </item>
+    <item>
+      <title>BROP — return-oriented programming without the binary</title>
+      <link>https://algoatson.github.io/p/brop-blind-rop/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/brop-blind-rop/</guid>
+      <pubDate>Thu, 14 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category>
+      <description>A remote service with a stack overflow, that forks per connection, and that you have no binary for. Blind ROP turns the only feedback you have — does the connection crash or not — into an oracle, and reads the canary, finds gadgets, and dumps the binary over the socket. The most elegant trick in the ROP toolkit.</description>
     </item>
   </channel>
 </rss>

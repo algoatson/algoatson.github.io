@@ -4,9 +4,9 @@
     <title>algoatson.github.io</title>
     <link>https://algoatson.github.io/</link>
     <atom:link href="https://algoatson.github.io/feed.xml" rel="self" type="application/rss+xml"/>
-    <description>NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.</description>
+    <description>A remote service with a stack overflow, that forks per connection, and that you have no binary for. Blind ROP turns the only feedback you have — does the connection crash or not — into an oracle, and reads the canary, finds gadgets, and dumps the binary over the socket. The most elegant trick in the ROP toolkit.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 16:54:32 +0000</lastBuildDate>
+    <lastBuildDate>Tue, 16 Jun 2026 02:38:36 +0000</lastBuildDate>
     <item>
       <title>House of Apple 2 — FSOP after the hooks died</title>
       <link>https://algoatson.github.io/p/house-of-apple-2/</link>
@@ -240,12 +240,12 @@
       <description>A textbook menu-driven heap challenge, start to finish. A dangling pointer after delete gives a read and a write on freed memory; the unsorted bin leaks libc, tcache poisoning aims a freed chunk at __free_hook, and the program frees its way into a shell.</description>
     </item>
     <item>
-      <title>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</title>
-      <link>https://algoatson.github.io/p/finding-gadgets/</link>
-      <guid isPermaLink="true">https://algoatson.github.io/p/finding-gadgets/</guid>
-      <pubDate>Tue, 12 May 2026 00:00:00 +0000</pubDate>
-      <category>pwn</category><category>rop</category><category>tooling</category>
-      <description>NX means you reuse the code that&#x27;s already there. Here are the tools that find the pieces, the pwntools layer that assembles them into a chain, and the three structured techniques for when a clean `pop rdi; ret` just isn&#x27;t in the binary.</description>
+      <title>BROP — return-oriented programming without the binary</title>
+      <link>https://algoatson.github.io/p/brop-blind-rop/</link>
+      <guid isPermaLink="true">https://algoatson.github.io/p/brop-blind-rop/</guid>
+      <pubDate>Thu, 14 May 2026 00:00:00 +0000</pubDate>
+      <category>pwn</category><category>rop</category>
+      <description>A remote service with a stack overflow, that forks per connection, and that you have no binary for. Blind ROP turns the only feedback you have — does the connection crash or not — into an oracle, and reads the canary, finds gadgets, and dumps the binary over the socket. The most elegant trick in the ROP toolkit.</description>
     </item>
   </channel>
 </rss>

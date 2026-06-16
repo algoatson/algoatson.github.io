@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/series/microarchitectural-attacks/feed.xml" rel="self" type="application/rss+xml"/>
     <description>A bounds check the CPU hasn&#x27;t finished evaluating doesn&#x27;t stop it from speculatively running the code behind it. Spectre v1 trains the branch predictor to run an out-of-bounds read, encodes the secret into the cache, and reads it back with FLUSH+RELOAD after the architecture rolls everything else away.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 16:54:32 +0000</lastBuildDate>
+    <lastBuildDate>Tue, 16 Jun 2026 02:38:36 +0000</lastBuildDate>
     <item>
       <title>FLUSH+RELOAD — reading secrets through the cache</title>
       <link>https://algoatson.github.io/p/flush-reload-cache-side-channel/</link>

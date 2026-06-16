@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/series/breaking-mitigations/feed.xml" rel="self" type="application/rss+xml"/>
     <description>ARMv8.3 signs pointers with a cryptographic MAC in their spare bits; ARMv8.5 tags every allocation with a 4-bit lock the pointer must match. Both are real upgrades over the stack canary — and both are beaten by the same old moves: a leak, a signing gadget, or a brute force the field is too small to resist.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 15 Jun 2026 16:54:31 +0000</lastBuildDate>
+    <lastBuildDate>Tue, 16 Jun 2026 02:38:36 +0000</lastBuildDate>
     <item>
       <title>the stack canary, from the source</title>
       <link>https://algoatson.github.io/p/the-stack-canary-from-the-source/</link>

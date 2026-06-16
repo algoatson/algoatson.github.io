@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>DirtyCred — swap the object, skip the corruption — algoatson.github.io</title>
+<meta name="description" content="Most kernel mitigations watch for corrupted pointers and hijacked control flow. DirtyCred sidesteps all of it — instead of overwriting bytes inside a cred or file, it frees the whole privileged object and lets a legitimate one take its place. A UAF becomes root with no leak, no ROP, and nothing for CFI to catch.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/dirtycred-swapping-credentials/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="DirtyCred — swap the object, skip the corruption — algoatson.github.io">
+<meta property="og:description" content="Most kernel mitigations watch for corrupted pointers and hijacked control flow. DirtyCred sidesteps all of it — instead of overwriting bytes inside a cred or file, it frees the whole privileged object and lets a legitimate one take its place. A UAF becomes root with no leak, no ROP, and nothing for CFI to catch.">
+<meta property="og:url" content="https://algoatson.github.io/p/dirtycred-swapping-credentials/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/dirtycred-swapping-credentials.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "DirtyCred — swap the object, skip the corruption", "datePublished": "2026-04-18", "dateModified": "2026-04-18", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "Most kernel mitigations watch for corrupted pointers and hijacked control flow. DirtyCred sidesteps all of it — instead of overwriting bytes inside a cred or file, it frees the whole privileged object and lets a legitimate one take its place. A UAF becomes root with no leak, no ROP, and nothing for CFI to catch.", "url": "https://algoatson.github.io/p/dirtycred-swapping-credentials/", "mainEntityOfPage": "https://algoatson.github.io/p/dirtycred-swapping-credentials/", "keywords": "kernel, pwn"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>DirtyCred — swap the object, skip the corruption</h1>
+  <div class="meta"><span>2026-04-18</span><span>3 min read</span><a class="tag" href="/tags/kernel/">kernel</a> <a class="tag" href="/tags/pwn/">pwn</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/linux-kernel-exploitation/">linux kernel exploitation</a><span class="series__pos">part 7 / 7 · ~24 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:100%"></span></div><ol class="series__list"><li><a href="/p/slab-uaf-modprobe/">a slab use-after-free, from ioctl to root</a></li><li><a href="/p/kernel-lpe-commit-creds/">kernel LPE — commit_creds(prepare_kernel_cred(0))</a></li><li><a href="/p/userfaultfd-fuse-race-windows/">userfaultfd &amp; FUSE — freezing a race until it&#x27;s deterministic</a></li><li><a href="/p/dirty-pipe-cve-2022-0847/">Dirty Pipe (CVE-2022-0847): one uninitialised flag</a></li><li><a href="/p/kernel-heap-spray-primitives/">kernel heap spray — the elastic objects you allocate on demand</a></li><li><a href="/p/cross-cache-attacks/">cross-cache attacks — reaching the objects in their own cache</a></li><li class="cur" aria-current="true">DirtyCred — swap the object, skip the corruption</li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-insight-privilege-is-a-whole-object-not-a-bit">the insight: privilege is a whole object, not a bit</a></li>
+<li><a href="#the-file-variant-the-elegant-one">the file variant (the elegant one)</a></li>
+<li><a href="#the-cred-variant">the cred variant</a></li>
+<li><a href="#why-it-bypasses-everything">why it bypasses everything</a></li>
+<li><a href="#the-defences-it-forced">the defences it forced</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The <a href="/p/kernel-lpe-commit-creds/">commit_creds path</a> hijacks control flow and pays
+the SMEP/SMAP/KASLR tax. DirtyCred (Zhenpeng Lin, 2022) asks a sharper question:
+why corrupt anything? The kernel already has privileged objects and unprivileged
+ones, allocated from the same caches. Free one and let the other land in its slot,
+and you've swapped privilege <strong>without writing a single pointer the mitigations are
+watching</strong>.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>technique</dt><dd>object-swapping on struct cred / struct file (data-only)</dd></div><div><dt>needs</dt><dd>a UAF or double-free on a cred or file (often via cross-cache)</dd></div><div><dt>bypasses</dt><dd>KASLR, SMEP/SMAP/KPTI, CFI — none of them see an object swap</dd></div></dl></div></figure>
+<h2 id="the-insight-privilege-is-a-whole-object-not-a-bit">the insight: privilege is a whole object, not a bit<a class="headerlink" href="#the-insight-privilege-is-a-whole-object-not-a-bit" title="Permanent link">#</a></h2>
+<p>A <code class="highlight">struct cred</code> <em>is</em> your privilege; a <code class="highlight">struct file</code>'s <code class="highlight">f_mode</code> <em>is</em> your
+read/write permission. Classic exploits corrupt a field inside these — and modern
+kernels harden exactly those fields and watch for the pointer games that reach
+them. DirtyCred never touches a field. It frees the entire object and relies on the
+allocator to hand the freed slot to a <em>legitimately allocated</em> privileged object of
+the same type.</p>
+<h2 id="the-file-variant-the-elegant-one">the file variant (the elegant one)<a class="headerlink" href="#the-file-variant-the-elegant-one" title="Permanent link">#</a></h2>
+<p>The cleanest version targets <code class="highlight">struct file</code>. A file opened read-only and one opened
+writable differ only by which <code class="highlight">struct file</code> your fd points at. Swap them:</p>
+<figure class="codeblock"><figcaption><span class="fname">DirtyCred file swap -&gt; write a read-only file</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#dirtycred-file-swap---write-a-read-only-file-1">1</a></span>
+<span class="normal"><a href="#dirtycred-file-swap---write-a-read-only-file-2">2</a></span>
+<span class="normal"><a href="#dirtycred-file-swap---write-a-read-only-file-3">3</a></span>
+<span class="normal"><a href="#dirtycred-file-swap---write-a-read-only-file-4">4</a></span>
+<span class="normal"><a href="#dirtycred-file-swap---write-a-read-only-file-5">5</a></span>
+<span class="normal"><a href="#dirtycred-file-swap---write-a-read-only-file-6">6</a></span>
+<span class="normal"><a href="#dirtycred-file-swap---write-a-read-only-file-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="dirtycred-file-swap---write-a-read-only-file-1">1. open a WRITABLE file you own        -&gt; fd_w -&gt; struct file (f_mode has WRITE)
+</span><span id="dirtycred-file-swap---write-a-read-only-file-2">2. trigger the bug to FREE fd_w&#39;s struct file, keep fd_w dangling
+</span><span id="dirtycred-file-swap---write-a-read-only-file-3">3. open a privileged READ-ONLY file    -&gt; e.g. /etc/passwd, root-owned
+</span><span id="dirtycred-file-swap---write-a-read-only-file-4">   the kernel allocates ITS struct file ... into the slot we just freed
+</span><span id="dirtycred-file-swap---write-a-read-only-file-5">4. write() through fd_w:
+</span><span id="dirtycred-file-swap---write-a-read-only-file-6">   the fd still believes it has WRITE mode, but the struct now backs /etc/passwd
+</span><span id="dirtycred-file-swap---write-a-read-only-file-7">   -&gt; you write to a file you could only read
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>You just edited <code class="highlight">/etc/passwd</code> (or a SUID binary, or <code class="highlight">sudoers</code>) with no permission —
+the same end state as <a href="/p/dirty-pipe-cve-2022-0847/">Dirty Pipe</a>, reached through a
+UAF instead of an uninitialised flag.</p>
+<h2 id="the-cred-variant">the cred variant<a class="headerlink" href="#the-cred-variant" title="Permanent link">#</a></h2>
+<p>The same move on <code class="highlight">struct cred</code> gives root directly: free your task's unprivileged
+<code class="highlight">cred</code> (keeping the task referencing the slot), then make a <strong>privileged</strong> process
+allocate a <code class="highlight">cred</code> — fork/exec a root daemon, or trip any path that calls
+<code class="highlight">prepare_kernel_cred</code>/<code class="highlight">prepare_creds</code> — so its root <code class="highlight">cred</code> lands in your freed slot.
+Your task now runs on root credentials it never earned:</p>
+<figure class="codeblock"><figcaption><span class="fname">cred swap -&gt; uid 0</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#cred-swap---uid-0-1">1</a></span>
+<span class="normal"><a href="#cred-swap---uid-0-2">2</a></span>
+<span class="normal"><a href="#cred-swap---uid-0-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="cred-swap---uid-0-1">free(my unprivileged cred, dangling)  -&gt;  trigger a privileged cred alloc
+</span><span id="cred-swap---uid-0-2">                                          (a root process forks/execs)
+</span><span id="cred-swap---uid-0-3">my task&#39;s -&gt;cred now points at a root cred  -&gt;  uid=0
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Because <code class="highlight">cred</code> and <code class="highlight">file</code> live in dedicated caches (<code class="highlight">cred_jar</code>, <code class="highlight">filp</code>), the free
+and the reclaim usually go through a <a href="/p/cross-cache-attacks/">cross-cache</a> step to
+line the slabs up.</p>
+<details class="spoiler">
+<summary>root, and CFI never fired</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] freed writable struct file (filp cache), fd 4 dangling
+</span><span id="code-2">[*] opened /etc/passwd O_RDONLY -&gt; reclaimed the slot
+</span><span id="code-3">[*] write(4, &quot;root::0:0...&quot;, ...) -&gt; 34 bytes into a read-only file
+</span><span id="code-4"># su
+</span><span id="code-5">segfault{i_swapped_the_object_not_a_pointer}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="why-it-bypasses-everything">why it bypasses everything<a class="headerlink" href="#why-it-bypasses-everything" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>No pointer is corrupted</strong>, so kCFI / CFI / pointer hardening have nothing to
+  flag — every pointer in play is one the kernel set itself.</li>
+<li><strong>No address is leaked</strong>, so KASLR is irrelevant — you never name a kernel address.</li>
+<li><strong>No code is executed out of place</strong>, so SMEP/SMAP/KPTI don't apply — there's no
+  ROP, no <code class="highlight">ret2usr</code>, no trampoline.</li>
+<li><strong>It's bug-generic</strong> — <em>any</em> UAF or double-free on a <code class="highlight">cred</code> or <code class="highlight">file</code> plugs in, so
+  one technique weaponises a huge class of bugs.</li>
+</ul>
+<h2 id="the-defences-it-forced">the defences it forced<a class="headerlink" href="#the-defences-it-forced" title="Permanent link">#</a></h2>
+<p>DirtyCred was influential enough to change the kernel: proposals to <strong>isolate
+privileged credentials</strong> onto separate, non-reclaimable memory (so a freed <code class="highlight">cred</code>
+slot can't be reused by an attacker-influenced allocation), virtual-address-based
+slab isolation, and tighter checks on <code class="highlight">cred</code> reuse. The arms race moved from
+"protect the field" to "isolate the object."</p>
+<p>DirtyCred is the data-only mindset at its purest: the kernel's mitigations are a
+fortress built around <em>corruption</em>, and an object swap simply isn't corruption.
+When a bug gives you a free on a <code class="highlight">cred</code> or a <code class="highlight">file</code>, don't reach for a ROP chain —
+reach for a legitimate privileged object and let the allocator do the exploit.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/cross-cache-attacks/"><span class="lbl">&#8249; prev</span>cross-cache attacks — reaching the objects in their own cache</a></nav></main>
+
+    <footer class="status">
+      <span>68 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

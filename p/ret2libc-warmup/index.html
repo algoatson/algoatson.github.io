@@ -42,7 +42,7 @@
   <h1>ret2libc on a warm-up: stack smash to shell</h1>
   <div class="meta"><span>2026-01-29</span><span>4 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/ctf/">ctf</a> <a class="tag" href="/tags/rop/">rop</a></div>
 </header>
-<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/return-oriented-programming/">return-oriented programming</a><span class="series__pos">part 1 / 8 · ~28 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:12%"></span></div><ol class="series__list"><li class="cur" aria-current="true">ret2libc on a warm-up: stack smash to shell</li><li><a href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a></li><li><a href="/p/ret2csu-universal-gadget/">ret2csu — the universal gadget hiding in every binary</a></li><li><a href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a></li><li><a href="/p/stack-pivoting/">stack pivoting — when the overflow is too small</a></li><li><a href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a></li><li><a href="/p/one-gadget-constraints/">one_gadget — a shell in a single address</a></li><li><a href="/p/setcontext-register-control/">the setcontext gadget — one call to every register</a></li></ol></aside>
+<aside class="series series--long" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/return-oriented-programming/">return-oriented programming</a><span class="series__pos">part 1 / 9 · ~32 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:11%"></span></div><ol class="series__list"><li class="cur" aria-current="true">ret2libc on a warm-up: stack smash to shell</li><li><a href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a></li><li><a href="/p/ret2csu-universal-gadget/">ret2csu — the universal gadget hiding in every binary</a></li><li><a href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a></li><li><a href="/p/stack-pivoting/">stack pivoting — when the overflow is too small</a></li><li><a href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a></li><li><a href="/p/one-gadget-constraints/">one_gadget — a shell in a single address</a></li><li><a href="/p/setcontext-register-control/">the setcontext gadget — one call to every register</a></li><li><a href="/p/brop-blind-rop/">BROP — return-oriented programming without the binary</a></li></ol></aside>
 <div class="postwrap has-toc">
   <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
 <ul>
@@ -197,7 +197,7 @@ the defender when there's no leak primitive at all.&#160;<a class="footnote-back
 <nav class="pager"><span></span><a class="next" href="/p/finding-gadgets/"><span class="lbl">next &#8250;</span>finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a></nav></main>
 
     <footer class="status">
-      <span>64 posts</span>
+      <span>68 posts</span>
       <span class="shade">&#9617;&#9618;&#9619;</span>
       <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
       <span class="right">

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>kernel heap spray — the elastic objects you allocate on demand — algoatson.github.io</title>
+<meta name="description" content="A kernel UAF is only useful if you can land controlled data in the freed slot. The exploit-dev toolkit is a handful of syscalls that allocate kernel objects of a size and content you choose — msg_msg, setxattr, add_key, sk_buff — each with different lifetime and reach across the SLUB caches.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/kernel-heap-spray-primitives/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="kernel heap spray — the elastic objects you allocate on demand — algoatson.github.io">
+<meta property="og:description" content="A kernel UAF is only useful if you can land controlled data in the freed slot. The exploit-dev toolkit is a handful of syscalls that allocate kernel objects of a size and content you choose — msg_msg, setxattr, add_key, sk_buff — each with different lifetime and reach across the SLUB caches.">
+<meta property="og:url" content="https://algoatson.github.io/p/kernel-heap-spray-primitives/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/kernel-heap-spray-primitives.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "kernel heap spray — the elastic objects you allocate on demand", "datePublished": "2026-04-14", "dateModified": "2026-04-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A kernel UAF is only useful if you can land controlled data in the freed slot. The exploit-dev toolkit is a handful of syscalls that allocate kernel objects of a size and content you choose — msg_msg, setxattr, add_key, sk_buff — each with different lifetime and reach across the SLUB caches.", "url": "https://algoatson.github.io/p/kernel-heap-spray-primitives/", "mainEntityOfPage": "https://algoatson.github.io/p/kernel-heap-spray-primitives/", "keywords": "kernel, pwn"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>kernel heap spray — the elastic objects you allocate on demand</h1>
+  <div class="meta"><span>2026-04-14</span><span>4 min read</span><a class="tag" href="/tags/kernel/">kernel</a> <a class="tag" href="/tags/pwn/">pwn</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/linux-kernel-exploitation/">linux kernel exploitation</a><span class="series__pos">part 5 / 7 · ~24 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:71%"></span></div><ol class="series__list"><li><a href="/p/slab-uaf-modprobe/">a slab use-after-free, from ioctl to root</a></li><li><a href="/p/kernel-lpe-commit-creds/">kernel LPE — commit_creds(prepare_kernel_cred(0))</a></li><li><a href="/p/userfaultfd-fuse-race-windows/">userfaultfd &amp; FUSE — freezing a race until it&#x27;s deterministic</a></li><li><a href="/p/dirty-pipe-cve-2022-0847/">Dirty Pipe (CVE-2022-0847): one uninitialised flag</a></li><li class="cur" aria-current="true">kernel heap spray — the elastic objects you allocate on demand</li><li><a href="/p/cross-cache-attacks/">cross-cache attacks — reaching the objects in their own cache</a></li><li><a href="/p/dirtycred-swapping-credentials/">DirtyCred — swap the object, skip the corruption</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#what-makes-an-object-useful">what makes an object useful</a></li>
+<li><a href="#msg_msg-the-workhorse">msg_msg — the workhorse</a></li>
+<li><a href="#add_key-persistent-simple-reliable">add_key — persistent, simple, reliable</a></li>
+<li><a href="#setxattr-total-control-but-it-evaporates">setxattr — total control, but it evaporates</a></li>
+<li><a href="#the-spray-pattern">the spray pattern</a></li>
+<li><a href="#what-stands-in-the-way">what stands in the way</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>The <a href="/p/slab-uaf-modprobe/">slab UAF</a> and every kernel use-after-free that follows
+share one requirement: after you free the victim, you need to <strong>reclaim its slot
+with bytes you control</strong>. That's a spray, and the kernel hands you several
+syscalls that allocate objects of an attacker-chosen size and content. Knowing
+this small zoo — which object, what size, how long it lives — is most of practical
+kernel heap exploitation.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>allocator</dt><dd>SLUB (kmalloc-8 .. kmalloc-8k, plus dedicated caches)</dd></div><div><dt>need</dt><dd>allocate an object of a chosen size, filled with chosen bytes, on command</dd></div><div><dt>the catch</dt><dd>lifetime — some sprays are persistent, some vanish unless you pin them</dd></div></dl></div></figure>
+<h2 id="what-makes-an-object-useful">what makes an object useful<a class="headerlink" href="#what-makes-an-object-useful" title="Permanent link">#</a></h2>
+<p>You want <strong>elastic</strong> objects: the <em>size</em> is controllable (so you can hit any
+<code class="highlight">kmalloc-N</code> cache the victim lives in) and the <em>content</em> is controllable (so you
+can forge whatever the victim's bytes mean — a function pointer, a length, a
+reference count, a type tag). Four cover almost everything:</p>
+<figure class="codeblock"><figcaption><span class="fname">the spray toolkit</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-spray-toolkit-1">1</a></span>
+<span class="normal"><a href="#the-spray-toolkit-2">2</a></span>
+<span class="normal"><a href="#the-spray-toolkit-3">3</a></span>
+<span class="normal"><a href="#the-spray-toolkit-4">4</a></span>
+<span class="normal"><a href="#the-spray-toolkit-5">5</a></span>
+<span class="normal"><a href="#the-spray-toolkit-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-spray-toolkit-1">object             syscall            size          content     lifetime
+</span><span id="the-spray-toolkit-2">-----------------  -----------------  ------------  ----------  --------------------
+</span><span id="the-spray-toolkit-3">msg_msg            msgsnd/msgrcv      ~48 .. 4096   full*       persistent (in queue)
+</span><span id="the-spray-toolkit-4">user_key_payload   add_key/keyctl     controlled    full        persistent (keyring)
+</span><span id="the-spray-toolkit-5">xattr buffer       setxattr           controlled    full        transient (freed fast)
+</span><span id="the-spray-toolkit-6">sk_buff data       send/recv socket   controlled    full**      persistent (in queue)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="msg_msg-the-workhorse">msg_msg — the workhorse<a class="headerlink" href="#msg_msg-the-workhorse" title="Permanent link">#</a></h2>
+<p>System V message queues allocate a <code class="highlight">struct msg_msg</code> header plus your data in one
+<code class="highlight">kmalloc</code> of a size you pick by message length. The data is fully attacker-
+controlled, it stays allocated until you receive it, and — because <code class="highlight">msg_msg</code>
+carries a <code class="highlight">m_ts</code> length and a <code class="highlight">next</code> pointer for segmented messages — a partial
+overwrite of those fields turns into an OOB read or a second UAF:</p>
+<figure class="codeblock"><figcaption><span class="fname">spray controlled bytes into kmalloc-N</span><span class="lang">c</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#spray-controlled-bytes-into-kmalloc-n-1">1</a></span>
+<span class="normal"><a href="#spray-controlled-bytes-into-kmalloc-n-2">2</a></span>
+<span class="normal"><a href="#spray-controlled-bytes-into-kmalloc-n-3">3</a></span>
+<span class="normal"><a href="#spray-controlled-bytes-into-kmalloc-n-4">4</a></span>
+<span class="normal"><a href="#spray-controlled-bytes-into-kmalloc-n-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="spray-controlled-bytes-into-kmalloc-n-1"><span class="k">struct</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">mtype</span><span class="p">;</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="n">data</span><span class="p">[</span><span class="n">N</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mh">0x30</span><span class="p">];</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="n">m</span><span class="p">;</span><span class="w">   </span><span class="c1">// -0x30: the msg_msg header</span>
+</span><span id="spray-controlled-bytes-into-kmalloc-n-2"><span class="n">m</span><span class="p">.</span><span class="n">mtype</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="n">memset</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="n">data</span><span class="p">,</span><span class="w"> </span><span class="mh">0x41</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="w"> </span><span class="n">m</span><span class="p">.</span><span class="n">data</span><span class="p">);</span>
+</span><span id="spray-controlled-bytes-into-kmalloc-n-3"><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">SPRAY</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+</span><span id="spray-controlled-bytes-into-kmalloc-n-4"><span class="w">    </span><span class="n">msgsnd</span><span class="p">(</span><span class="n">qid</span><span class="p">[</span><span class="n">i</span><span class="p">],</span><span class="w"> </span><span class="o">&amp;</span><span class="n">m</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="w"> </span><span class="n">m</span><span class="p">.</span><span class="n">data</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w">         </span><span class="c1">// each lands in kmalloc-N</span>
+</span><span id="spray-controlled-bytes-into-kmalloc-n-5"><span class="c1">// msgrcv(qid, ..., MSG_COPY|IPC_NOWAIT) peeks WITHOUT freeing -&gt; read back/leak</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="add_key-persistent-simple-reliable">add_key — persistent, simple, reliable<a class="headerlink" href="#add_key-persistent-simple-reliable" title="Permanent link">#</a></h2>
+<p><code class="highlight">add_key(&quot;user&quot;, ...)</code> allocates a <code class="highlight">user_key_payload</code> with your size and bytes and
+keeps it alive in the keyring. No header math, no queue bookkeeping — the go-to when
+you just need "N bytes of my data, parked, until I revoke it."</p>
+<h2 id="setxattr-total-control-but-it-evaporates">setxattr — total control, but it evaporates<a class="headerlink" href="#setxattr-total-control-but-it-evaporates" title="Permanent link">#</a></h2>
+<p><code class="highlight">setxattr</code> <code class="highlight">kmalloc</code>s a buffer of your exact size, copies your exact bytes in, does
+its work, and <strong>frees it immediately</strong>. Perfect content control, useless lifetime —
+unless you stop time. Register the source buffer with
+<a href="/p/userfaultfd-fuse-race-windows/">userfaultfd or FUSE</a> so the <code class="highlight">copy_from_user</code>
+<strong>blocks mid-copy</strong>: the allocation now sits there, filled with your data, frozen
+for as long as you hold the fault. That pairing — <code class="highlight">setxattr</code> for content,
+<code class="highlight">userfaultfd</code> for lifetime — is a staple.</p>
+<h2 id="the-spray-pattern">the spray pattern<a class="headerlink" href="#the-spray-pattern" title="Permanent link">#</a></h2>
+<p>The choreography around a UAF is always the same shape:</p>
+<figure class="codeblock"><figcaption><span class="fname">free -&gt; reclaim -&gt; control</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#free---reclaim---control-1">1</a></span>
+<span class="normal"><a href="#free---reclaim---control-2">2</a></span>
+<span class="normal"><a href="#free---reclaim---control-3">3</a></span>
+<span class="normal"><a href="#free---reclaim---control-4">4</a></span>
+<span class="normal"><a href="#free---reclaim---control-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="free---reclaim---control-1">1. allocate the victim (a struct with a function ptr / refcount / type field)
+</span><span id="free---reclaim---control-2">2. trigger the bug to free it (UAF / double-free), keep a dangling reference
+</span><span id="free---reclaim---control-3">3. SPRAY: msgsnd / add_key x200  of size == the victim&#39;s kmalloc cache
+</span><span id="free---reclaim---control-4">4. one spray object lands in the freed slot -&gt; its bytes ARE the victim now
+</span><span id="free---reclaim---control-5">5. use the dangling reference: the kernel reads YOUR forged function ptr / length
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>the freed slot, now full of my bytes</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] victim (kmalloc-256) freed; 200x msg_msg sprayed
+</span><span id="code-2">[*] dangling -&gt;ops-&gt;ioctl now reads 0x4141414141414141  (our spray)
+</span><span id="code-3">[*] reclaimed: control of the victim object achieved
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="what-stands-in-the-way">what stands in the way<a class="headerlink" href="#what-stands-in-the-way" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Dedicated caches.</strong> Many juicy structs (<code class="highlight">cred</code>, <code class="highlight">file</code>, <code class="highlight">task_struct</code>) live in
+  their <em>own</em> <code class="highlight">kmem_cache</code>, so a <code class="highlight">kmalloc-N</code> spray can't reach them. That's what
+  <a href="/p/cross-cache-attacks/">cross-cache attacks</a> are for.</li>
+<li><strong>Cache randomization &amp; hardening.</strong> <code class="highlight">CONFIG_SLAB_FREELIST_RANDOM</code> and
+  <code class="highlight">RANDOM_KMALLOC_CACHES</code> perturb which slot you get; you spray <em>more</em> and rely on
+  statistics, or groom deterministically.</li>
+<li><strong><code class="highlight">CONFIG_SLAB_VIRTUAL</code> / autoslab</strong> and freelist hardening raise the bar on what
+  a freed pointer can become.</li>
+</ul>
+<p>These syscalls are the kernel-pwn equivalent of <code class="highlight">malloc(size)</code> with attacker bytes.
+Once you can put your data, at your size, into the freed slot of a victim object,
+every UAF becomes a question of <em>what the victim's bytes mean</em> — and the next two
+parts are about reaching the victims that don't live in a <code class="highlight">kmalloc-N</code> cache at all.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/dirty-pipe-cve-2022-0847/"><span class="lbl">&#8249; prev</span>Dirty Pipe (CVE-2022-0847): one uninitialised flag</a><a class="next" href="/p/cross-cache-attacks/"><span class="lbl">next &#8250;</span>cross-cache attacks — reaching the objects in their own cache</a></nav></main>
+
+    <footer class="status">
+      <span>68 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

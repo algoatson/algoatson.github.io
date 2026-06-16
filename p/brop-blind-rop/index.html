@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>BROP — return-oriented programming without the binary — algoatson.github.io</title>
+<meta name="description" content="A remote service with a stack overflow, that forks per connection, and that you have no binary for. Blind ROP turns the only feedback you have — does the connection crash or not — into an oracle, and reads the canary, finds gadgets, and dumps the binary over the socket. The most elegant trick in the ROP toolkit.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/brop-blind-rop/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="BROP — return-oriented programming without the binary — algoatson.github.io">
+<meta property="og:description" content="A remote service with a stack overflow, that forks per connection, and that you have no binary for. Blind ROP turns the only feedback you have — does the connection crash or not — into an oracle, and reads the canary, finds gadgets, and dumps the binary over the socket. The most elegant trick in the ROP toolkit.">
+<meta property="og:url" content="https://algoatson.github.io/p/brop-blind-rop/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/brop-blind-rop.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "BROP — return-oriented programming without the binary", "datePublished": "2026-05-14", "dateModified": "2026-05-14", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "A remote service with a stack overflow, that forks per connection, and that you have no binary for. Blind ROP turns the only feedback you have — does the connection crash or not — into an oracle, and reads the canary, finds gadgets, and dumps the binary over the socket. The most elegant trick in the ROP toolkit.", "url": "https://algoatson.github.io/p/brop-blind-rop/", "mainEntityOfPage": "https://algoatson.github.io/p/brop-blind-rop/", "keywords": "pwn, rop"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>BROP — return-oriented programming without the binary</h1>
+  <div class="meta"><span>2026-05-14</span><span>4 min read</span><a class="tag" href="/tags/pwn/">pwn</a> <a class="tag" href="/tags/rop/">rop</a></div>
+</header>
+<aside class="series series--long" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/return-oriented-programming/">return-oriented programming</a><span class="series__pos">part 9 / 9 · ~32 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:100%"></span></div><ol class="series__list"><li><a href="/p/ret2libc-warmup/">ret2libc on a warm-up: stack smash to shell</a></li><li><a href="/p/finding-gadgets/">finding gadgets: ROPgadget, ropper, one_gadget, pwntools</a></li><li><a href="/p/ret2csu-universal-gadget/">ret2csu — the universal gadget hiding in every binary</a></li><li><a href="/p/ret2dlresolve-no-leak/">ret2dlresolve — a shell with no libc leak</a></li><li><a href="/p/stack-pivoting/">stack pivoting — when the overflow is too small</a></li><li><a href="/p/srop-one-syscall-every-register/">SROP — one syscall, every register</a></li><li><a href="/p/one-gadget-constraints/">one_gadget — a shell in a single address</a></li><li><a href="/p/setcontext-register-control/">the setcontext gadget — one call to every register</a></li><li class="cur" aria-current="true">BROP — return-oriented programming without the binary</li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#the-oracle-crash-or-no-crash">the oracle: crash or no crash</a></li>
+<li><a href="#step-1-read-the-stack-a-byte-at-a-time">step 1 — read the stack a byte at a time</a></li>
+<li><a href="#step-2-find-gadgets-by-probing">step 2 — find gadgets by probing</a></li>
+<li><a href="#step-3-dump-the-binary-over-the-socket">step 3 — dump the binary over the socket</a></li>
+<li><a href="#the-conditions-and-the-lesson">the conditions, and the lesson</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p>Every other part of this series assumed you had the binary. BROP (Bittau et al.,
+"Hacking Blind") is what you do when you don't — a remote target, a stack overflow,
+and nothing else. Two properties make it possible: the server <strong>forks</strong> a child per
+connection (so addresses and the canary are identical every time, and a child crash
+doesn't kill the parent), and a crash is <strong>observable</strong> (the connection drops).
+That's an oracle, and an oracle is enough.</p>
+<figure class="target"><figcaption><span class="t-label">target</span><span class="t-file">remote forking server with a stack buffer overflow</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>have</dt><dd>no binary, no libc, ASLR + canary on</dd></div><div><dt>oracle</dt><dd>connection CRASHES vs STAYS UP after my overwrite</dd></div></dl></div></figure>
+<h2 id="the-oracle-crash-or-no-crash">the oracle: crash or no crash<a class="headerlink" href="#the-oracle-crash-or-no-crash" title="Permanent link">#</a></h2>
+<p>Because the parent re-forks an identical child each time, you can overwrite the
+stack with a guess, observe whether <em>that</em> child crashes, and try again — the
+addresses never reshuffle. One bit per attempt, but a reliable bit, and that's the
+whole foundation.</p>
+<h2 id="step-1-read-the-stack-a-byte-at-a-time">step 1 — read the stack a byte at a time<a class="headerlink" href="#step-1-read-the-stack-a-byte-at-a-time" title="Permanent link">#</a></h2>
+<p>Overwrite a single byte of the saved canary with a guess and let the function
+return. Wrong guess → the canary check fails → crash. Right guess → it passes →
+no crash. The low byte is the null terminator, so:</p>
+<div class="math math-block"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>guesses</mtext><mo>&#x02264;</mo><mn>256</mn><mo>&#x000D7;</mo><mo stretchy="false">&#x00028;</mo><mtext>8&#x000A0;canary</mtext><mo>&#x0002B;</mo><mtext>8&#x000A0;saved&#x000A0;RIP</mtext><mo stretchy="false">&#x00029;</mo></mrow></math></div>
+<p>recovers the canary <em>and</em> the saved return address — and that return address is a
+code pointer, so <strong>ASLR is now defeated</strong> for the text segment. Same byte-by-byte
+<a href="/p/the-stack-canary-from-the-source/">brute force as the canary on a fork server</a>,
+extended to read whatever sits on the stack.</p>
+<h2 id="step-2-find-gadgets-by-probing">step 2 — find gadgets by probing<a class="headerlink" href="#step-2-find-gadgets-by-probing" title="Permanent link">#</a></h2>
+<p>Now you can redirect execution to any address; you just don't know what's there.
+Probe by setting the return address to a candidate and reading the oracle:</p>
+<ul>
+<li><strong>A stop gadget</strong> is any address that <em>keeps the connection alive</em> when returned
+  to (it blocks, loops, or re-enters <code class="highlight">accept</code>). It's your "no crash" marker — the
+  known-good you build every other test against.</li>
+<li><strong>The BROP gadget</strong> is the <a href="/p/ret2csu-universal-gadget/"><code class="highlight">__libc_csu_init</code> pop sequence</a> —
+  <code class="highlight">pop rbx; pop rbp; pop r12..r15; ret</code>. You find it by signature: lay out
+  <code class="highlight">[candidate][stop]x6[trap]</code>. If <code class="highlight">candidate</code> pops six values (landing on the stop
+  gadgets) and rets cleanly, the connection survives; if it pops a different number,
+  it hits the trap and crashes. That signature pinpoints the gadget — and entering
+  it at <code class="highlight">+0x9</code> gives you a <code class="highlight">pop rdi; ret</code>, at the right offset a <code class="highlight">pop rsi; ret</code>.</li>
+</ul>
+<figure class="codeblock"><figcaption><span class="fname">probing for the pop-6 gadget</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#probing-for-the-pop-6-gadget-1">1</a></span>
+<span class="normal"><a href="#probing-for-the-pop-6-gadget-2">2</a></span>
+<span class="normal"><a href="#probing-for-the-pop-6-gadget-3">3</a></span>
+<span class="normal"><a href="#probing-for-the-pop-6-gadget-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="probing-for-the-pop-6-gadget-1">stack:  [ CANDIDATE ][ STOP ][ STOP ][ STOP ][ STOP ][ STOP ][ STOP ][ TRAP ]
+</span><span id="probing-for-the-pop-6-gadget-2">          if CANDIDATE == pop rbx;pop rbp;pop r12;pop r13;pop r14;pop r15;ret
+</span><span id="probing-for-the-pop-6-gadget-3">          -&gt; it consumes the 6 STOPs, rets into a STOP -&gt; CONNECTION SURVIVES
+</span><span id="probing-for-the-pop-6-gadget-4">          else -&gt; falls into TRAP -&gt; crash
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="step-3-dump-the-binary-over-the-socket">step 3 — dump the binary over the socket<a class="headerlink" href="#step-3-dump-the-binary-over-the-socket" title="Permanent link">#</a></h2>
+<p>With <code class="highlight">pop rdi</code>/<code class="highlight">pop rsi</code>/<code class="highlight">pop rdx</code> in hand, find a <code class="highlight">write</code> (scan the PLT — it has a
+regular stride) and call <code class="highlight">write(socket_fd, code_addr, length)</code> to <strong>stream the
+binary's <code class="highlight">.text</code> back over your own connection</strong>. Now you have the binary; the blind
+phase is over.</p>
+<figure class="codeblock"><figcaption><span class="fname">brop.py (sketch)</span><span class="lang">python</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#broppy-sketch-1">1</a></span>
+<span class="normal"><a href="#broppy-sketch-2">2</a></span>
+<span class="normal"><a href="#broppy-sketch-3">3</a></span>
+<span class="normal"><a href="#broppy-sketch-4">4</a></span>
+<span class="normal"><a href="#broppy-sketch-5">5</a></span>
+<span class="normal"><a href="#broppy-sketch-6">6</a></span>
+<span class="normal"><a href="#broppy-sketch-7">7</a></span>
+<span class="normal"><a href="#broppy-sketch-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="broppy-sketch-1"><span class="n">canary</span><span class="p">,</span> <span class="n">ret</span> <span class="o">=</span> <span class="n">stack_read</span><span class="p">(</span><span class="n">oracle</span><span class="p">)</span>          <span class="c1"># 1: byte-by-byte, defeats canary+ASLR</span>
+</span><span id="broppy-sketch-2"><span class="n">stop</span>          <span class="o">=</span> <span class="n">find_stop_gadget</span><span class="p">(</span><span class="n">oracle</span><span class="p">)</span>  <span class="c1"># 2: a &quot;stays up&quot; address</span>
+</span><span id="broppy-sketch-3"><span class="hll"><span class="n">brop</span>          <span class="o">=</span> <span class="n">find_brop_gadget</span><span class="p">(</span><span class="n">oracle</span><span class="p">)</span>  <span class="c1"># 2: the __libc_csu_init pop-6</span>
+</span></span><span id="broppy-sketch-4"><span class="n">pop_rdi</span>       <span class="o">=</span> <span class="n">brop</span> <span class="o">+</span> <span class="mh">0x9</span>                 <span class="c1">#    overlapping decode -&gt; pop rdi; ret</span>
+</span><span id="broppy-sketch-5"><span class="hll"><span class="n">write_plt</span>     <span class="o">=</span> <span class="n">find_plt_write</span><span class="p">(</span><span class="n">oracle</span><span class="p">)</span>     <span class="c1"># 3: locate write@plt by probing</span>
+</span></span><span id="broppy-sketch-6"><span class="n">dump</span> <span class="o">=</span> <span class="n">rop</span><span class="p">(</span><span class="n">pop_rdi</span><span class="p">,</span> <span class="n">sock</span><span class="p">,</span> <span class="n">pop_rsi</span><span class="p">,</span> <span class="n">text_base</span><span class="p">,</span> <span class="n">pop_rdx</span><span class="p">,</span> <span class="mh">0x1000</span><span class="p">,</span> <span class="n">write_plt</span><span class="p">)</span>
+</span><span id="broppy-sketch-7"><span class="hll"><span class="n">binary</span> <span class="o">=</span> <span class="n">recv_until_len</span><span class="p">(</span><span class="mh">0x1000</span><span class="p">)</span>            <span class="c1"># the .text, leaked to ourselves</span>
+</span></span><span id="broppy-sketch-8"><span class="c1"># -&gt; from here it&#39;s ordinary ROP with a known binary: system / execve</span>
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<details class="spoiler">
+<summary>from a blind overflow to a shell</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] canary  = 0x8f3a...00   (1792 probes)
+</span><span id="code-2">[*] text    @ 0x4006xx      (saved RIP read)
+</span><span id="code-3">[*] BROP gadget @ 0x40075a; write@plt @ 0x400560
+</span><span id="code-4">[*] dumped 0x1000 bytes -&gt; found a real pop rdi + system
+</span><span id="code-5">segfault{i_never_had_the_binary}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="the-conditions-and-the-lesson">the conditions, and the lesson<a class="headerlink" href="#the-conditions-and-the-lesson" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Forking is the enabler.</strong> A server that re-forks identical children (classic
+  <code class="highlight">nginx</code>/<code class="highlight">openssh</code>-style pre-fork) gives stable addresses and survivable crashes.
+  A server that re-<code class="highlight">execve</code>s (fresh ASLR each time) breaks stack reading.</li>
+<li><strong>The crash signal is everything.</strong> Connection reset, timeout, error — any
+  distinguishable "it died" turns into the oracle. Remove the signal and BROP
+  stalls.</li>
+<li><strong>It collapses the usual prerequisites.</strong> No binary, no libc, ASLR + canary on —
+  and yet a single overflow plus a fork server yields the binary and then a shell.</li>
+</ul>
+<p>BROP is the ROP toolkit's proof that "we don't have the binary" is not the
+defense it sounds like. Give an attacker a stack overflow, a fork server, and a way
+to tell a crash from a hang, and they will read your secrets off the stack and
+politely ask your own <code class="highlight">write()</code> to mail them the executable.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-05-26</span><a class="row__tag" href="/tags/pwn/">pwn</a><a class="row__title" href="/p/writeup-static-srop/">writeup: static — no libc, no leak, just SROP</a><span class="row__min">3 min</span></div><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/setcontext-register-control/"><span class="lbl">&#8249; prev</span>the setcontext gadget — one call to every register</a></nav></main>
+
+    <footer class="status">
+      <span>68 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

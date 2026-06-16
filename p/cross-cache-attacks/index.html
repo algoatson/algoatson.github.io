@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-crt="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060606" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+<script>(function(){try{var d=document.documentElement,m=localStorage.getItem('sf.mode');if(!m)m=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';d.setAttribute('data-mode',m);if(localStorage.getItem('sf.crt')==='on')d.setAttribute('data-crt','on');}catch(e){}})();</script>
+<title>cross-cache attacks — reaching the objects in their own cache — algoatson.github.io</title>
+<meta name="description" content="The juicy kernel structs — cred, file, task_struct — live in dedicated caches a kmalloc spray can&#x27;t touch. Cross-cache attacks free the victim&#x27;s whole slab page back to the buddy allocator and let a different cache claim it, so two object types overlap on the same physical page. The trick that turns a UAF in one cache into a bug affecting another.">
+<meta name="author" content="your name here">
+<link rel="canonical" href="https://algoatson.github.io/p/cross-cache-attacks/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="cross-cache attacks — reaching the objects in their own cache — algoatson.github.io">
+<meta property="og:description" content="The juicy kernel structs — cred, file, task_struct — live in dedicated caches a kmalloc spray can&#x27;t touch. Cross-cache attacks free the victim&#x27;s whole slab page back to the buddy allocator and let a different cache claim it, so two object types overlap on the same physical page. The trick that turns a UAF in one cache into a bug affecting another.">
+<meta property="og:url" content="https://algoatson.github.io/p/cross-cache-attacks/">
+<meta property="og:site_name" content="algoatson.github.io">
+<meta property="og:image" content="https://algoatson.github.io/assets/og/cross-cache-attacks.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/vga.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="alternate" type="application/rss+xml" title="algoatson.github.io" href="/feed.xml">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/pygments.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "cross-cache attacks — reaching the objects in their own cache", "datePublished": "2026-04-16", "dateModified": "2026-04-16", "author": {"@type": "Person", "name": "your name here"}, "publisher": {"@type": "Person", "name": "segfault"}, "description": "The juicy kernel structs — cred, file, task_struct — live in dedicated caches a kmalloc spray can't touch. Cross-cache attacks free the victim's whole slab page back to the buddy allocator and let a different cache claim it, so two object types overlap on the same physical page. The trick that turns a UAF in one cache into a bug affecting another.", "url": "https://algoatson.github.io/p/cross-cache-attacks/", "mainEntityOfPage": "https://algoatson.github.io/p/cross-cache-attacks/", "keywords": "kernel, pwn"}</script></head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+<div class="wrap">
+  <div class="frame">
+    <span class="frame__legend"><a href="/">algoatson.github.io</a></span>
+    <span class="frame__addr">~/posts</span>
+
+    <header class="bar">
+      <span class="bar__prompt">&#10095; <b>segfault</b>@algoatson.github.io</span>
+      <nav class="nav" aria-label="primary"><a href="/about/">whoami</a><a href="/" aria-current="page">posts</a><a href="/series/">series</a><a href="/tags/">tags</a></nav>
+      <button class="searchbtn" data-open="search" type="button">grep<kbd>/</kbd></button>
+    </header>
+
+    <main class="main" id="main">
+<a class="backlink" href="/">back to index</a>
+<header class="posthead">
+  <h1>cross-cache attacks — reaching the objects in their own cache</h1>
+  <div class="meta"><span>2026-04-16</span><span>3 min read</span><a class="tag" href="/tags/kernel/">kernel</a> <a class="tag" href="/tags/pwn/">pwn</a></div>
+</header>
+<aside class="series" aria-label="series navigation"><div class="series__head"><span class="series__label">series</span><a class="series__name" href="/series/linux-kernel-exploitation/">linux kernel exploitation</a><span class="series__pos">part 6 / 7 · ~24 min</span></div><div class="series__bar" aria-hidden="true"><span style="width:86%"></span></div><ol class="series__list"><li><a href="/p/slab-uaf-modprobe/">a slab use-after-free, from ioctl to root</a></li><li><a href="/p/kernel-lpe-commit-creds/">kernel LPE — commit_creds(prepare_kernel_cred(0))</a></li><li><a href="/p/userfaultfd-fuse-race-windows/">userfaultfd &amp; FUSE — freezing a race until it&#x27;s deterministic</a></li><li><a href="/p/dirty-pipe-cve-2022-0847/">Dirty Pipe (CVE-2022-0847): one uninitialised flag</a></li><li><a href="/p/kernel-heap-spray-primitives/">kernel heap spray — the elastic objects you allocate on demand</a></li><li class="cur" aria-current="true">cross-cache attacks — reaching the objects in their own cache</li><li><a href="/p/dirtycred-swapping-credentials/">DirtyCred — swap the object, skip the corruption</a></li></ol></aside>
+<div class="postwrap has-toc">
+  <aside class="toc" aria-label="table of contents"><span class="toctitle">contents</span><div class="toc">
+<ul>
+<li><a href="#slub-sits-on-top-of-the-page-allocator">SLUB sits on top of the page allocator</a></li>
+<li><a href="#the-choreography">the choreography</a></li>
+<li><a href="#why-it-matters-now-and-what-fights-it">why it matters now, and what fights it</a></li>
+</ul>
+</div>
+</aside>
+  <article class="prose"><p><a href="/p/kernel-heap-spray-primitives/">Heap spray</a> works beautifully — until the object
+you want to corrupt lives in its own <code class="highlight">kmem_cache</code>. A UAF in <code class="highlight">kmalloc-256</code> can't
+reclaim a <code class="highlight">struct cred</code> (own cache: <code class="highlight">cred_jar</code>) or a <code class="highlight">struct file</code> (own cache:
+<code class="highlight">filp</code>) by spraying, because SLUB serves each cache from separate slabs. Cross-cache
+attacks demolish that isolation by operating one level down — at the page.</p>
+<figure class="target"><figcaption><span class="t-label">target</span></figcaption><div class="target__grid target__grid--solo"><dl class="target__facts"><div><dt>problem</dt><dd>the victim UAF is in cache A; the object you want is in cache B</dd></div><div><dt>isolation</dt><dd>SLUB never mixes two caches&#x27; objects on one slab</dd></div><div><dt>lever</dt><dd>but slabs are just pages, and the buddy allocator recycles pages across caches</dd></div></dl></div></figure>
+<h2 id="slub-sits-on-top-of-the-page-allocator">SLUB sits on top of the page allocator<a class="headerlink" href="#slub-sits-on-top-of-the-page-allocator" title="Permanent link">#</a></h2>
+<p>A <code class="highlight">kmem_cache</code> doesn't own memory forever. It requests <strong>slabs</strong> — runs of pages —
+from the buddy (page) allocator, carves them into objects, and when a slab becomes
+entirely free, SLUB can hand that <strong>page back to the buddy allocator</strong>. The buddy
+allocator has no notion of caches: the next code to ask for a page of that order
+gets it, <em>whatever cache it's for</em>. That return-and-reuse is the whole attack.</p>
+<figure class="codeblock"><figcaption><span class="fname">the cross-cache primitive</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#the-cross-cache-primitive-1">1</a></span>
+<span class="normal"><a href="#the-cross-cache-primitive-2">2</a></span>
+<span class="normal"><a href="#the-cross-cache-primitive-3">3</a></span>
+<span class="normal"><a href="#the-cross-cache-primitive-4">4</a></span>
+<span class="normal"><a href="#the-cross-cache-primitive-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="the-cross-cache-primitive-1">1. groom cache A so the victim sits on a slab you can empty
+</span><span id="the-cross-cache-primitive-2">2. free EVERY object on that slab  -&gt;  the slab page goes back to the buddy allocator
+</span><span id="the-cross-cache-primitive-3">3. immediately make cache B demand new slabs (allocate many B objects)
+</span><span id="the-cross-cache-primitive-4">4. cache B is handed the SAME page  -&gt;  B&#39;s objects now overlap A&#39;s freed slot
+</span><span id="the-cross-cache-primitive-5">5. your dangling cache-A reference now points INTO a cache-B object  (e.g. a cred)
+</span></code></pre></div></td></tr></table></div>
+</figure>
+<h2 id="the-choreography">the choreography<a class="headerlink" href="#the-choreography" title="Permanent link">#</a></h2>
+<p>The hard part is step 2 — emptying the victim's slab so the <em>whole page</em> frees, not
+just one object. You groom: allocate enough victims to fill a fresh slab, arrange
+the dangling reference to one of them, then free the entire slab's worth so SLUB
+releases the page:</p>
+<figure class="codeblock"><figcaption><span class="fname">grooming an empty slab so the page is released</span><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#grooming-an-empty-slab-so-the-page-is-released-1">1</a></span>
+<span class="normal"><a href="#grooming-an-empty-slab-so-the-page-is-released-2">2</a></span>
+<span class="normal"><a href="#grooming-an-empty-slab-so-the-page-is-released-3">3</a></span>
+<span class="normal"><a href="#grooming-an-empty-slab-so-the-page-is-released-4">4</a></span>
+<span class="normal"><a href="#grooming-an-empty-slab-so-the-page-is-released-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="grooming-an-empty-slab-so-the-page-is-released-1">spray A:   fill a brand-new slab with N victim objects (N = objects-per-slab)
+</span><span id="grooming-an-empty-slab-so-the-page-is-released-2">dangle:    keep a UAF reference to one victim on that slab
+</span><span id="grooming-an-empty-slab-so-the-page-is-released-3"><span class="hll">free A:    release all N  -&gt;  slab empty  -&gt;  page returned to buddy allocator
+</span></span><span id="grooming-an-empty-slab-so-the-page-is-released-4">claim B:   allocate cred/file/pipe_buffer objects until cache B grabs that page
+</span><span id="grooming-an-empty-slab-so-the-page-is-released-5"><span class="hll">overlap:   the dangling A pointer and a fresh B object share bytes
+</span></span></code></pre></div></td></tr></table></div>
+</figure>
+<p>Now a UAF that could only ever corrupt a <code class="highlight">kmalloc-256</code> object reaches a
+<code class="highlight">struct cred</code> — and overwriting the right bytes of a <code class="highlight">cred</code> is
+<a href="/p/kernel-lpe-commit-creds/">root</a>, without ever leaking an address or corrupting
+a pointer the mitigations watch.</p>
+<details class="spoiler">
+<summary>a kmalloc UAF that ends up inside cred_jar</summary>
+<figure class="codeblock"><figcaption><span class="lang">txt</span><span class="capbtns"><button class="nums" type="button" data-toggle="nums" aria-pressed="true" aria-label="toggle line numbers" title="toggle line numbers">#</button><button class="copy" type="button" aria-label="copy code">copy</button></span></figcaption><div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"><a href="#code-1">1</a></span>
+<span class="normal"><a href="#code-2">2</a></span>
+<span class="normal"><a href="#code-3">3</a></span>
+<span class="normal"><a href="#code-4">4</a></span>
+<span class="normal"><a href="#code-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="code-1">[*] filled victim slab (kmalloc-256), 16 objs/slab
+</span><span id="code-2">[*] freed all 16 -&gt; order-1 page released to buddy
+</span><span id="code-3">[*] sprayed 512 struct cred -&gt; cred_jar reclaimed the page
+</span><span id="code-4">[*] dangling ref now overlays a cred; uid patched -&gt; uid=0
+</span><span id="code-5">segfault{the_page_does_not_care_which_cache}
+</span></code></pre></div></td></tr></table></div>
+</figure>
+</details>
+<h2 id="why-it-matters-now-and-what-fights-it">why it matters now, and what fights it<a class="headerlink" href="#why-it-matters-now-and-what-fights-it" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>It's the answer to dedicated caches.</strong> Modern hardening puts dangerous structs
+  in isolated caches <em>precisely</em> to stop reclaim-by-spray; cross-cache steps under
+  that isolation at the page layer, so it's the default technique in current kernel
+  exploits.</li>
+<li><strong>It composes with <a href="/p/dirtycred-swapping-credentials/">DirtyCred</a>.</strong> Cross-cache
+  to get a <code class="highlight">cred</code>/<code class="highlight">file</code> page where you want it, then swap the privileged object in.</li>
+<li><strong>The defences are page-level too.</strong> <code class="highlight">CONFIG_SLAB_VIRTUAL</code>, per-cache page pools,
+  and not returning slabs to the buddy allocator promptly all raise the cost; the
+  attack adapts by grooming harder and racing the page reuse.</li>
+</ul>
+<p>The mental shift from userland: in glibc you reshape <em>bins</em>; in the kernel you
+reshape <em>slabs and pages</em>. SLUB's caches look like strong isolation until you
+remember they're all renting from the same page allocator — and a page you free in
+one cache is a page another cache will gladly reuse.</p></article>
+</div>
+<section class="related"><span class="related__title">related</span><div class="listing"><div class="row"><span class="row__date">2026-06-15</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-apple-2/">House of Apple 2 — FSOP after the hooks died</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/house-of-spirit/">the House of Spirit</a><span class="row__min">4 min</span></div><div class="row"><span class="row__date">2026-06-14</span><a class="row__tag" href="/tags/heap/">heap</a><a class="row__title" href="/p/poison-null-byte/">the poison null byte</a><span class="row__min">3 min</span></div></div></section>
+<nav class="pager"><a class="prev" href="/p/kernel-heap-spray-primitives/"><span class="lbl">&#8249; prev</span>kernel heap spray — the elastic objects you allocate on demand</a><a class="next" href="/p/dirtycred-swapping-credentials/"><span class="lbl">next &#8250;</span>DirtyCred — swap the object, skip the corruption</a></nav></main>
+
+    <footer class="status">
+      <span>68 posts</span>
+      <span class="shade">&#9617;&#9618;&#9619;</span>
+      <span>no trackers · no cookies · no js required to read · copying is encouraged</span>
+      <span class="right">
+        <a href="https://github.com/algoatson">github</a><a href="https://twitter.com/yourname">twitter</a><a href="mailto:you@segfault.sh">email</a>
+        <button class="toggle" data-toggle="mode" type="button">[light]</button>
+        <button class="toggle" data-toggle="crt" type="button">[crt]</button>
+        <a href="/feed.xml">[rss]</a>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<div class="palette-mask" role="dialog" aria-modal="true" aria-label="search">
+  <div class="palette">
+    <div class="palette__count">grep<span class="n">0/0</span><span class="rule"></span>posts</div>
+    <div class="palette__input"><span class="sigil">&gt;</span><input type="text"
+       placeholder="fuzzy search title + body…" autocomplete="off" spellcheck="false" aria-label="search query"></div>
+    <div class="palette__results"></div>
+    <div class="palette__hint"><span><kbd>↑↓</kbd>/<kbd>^j ^k</kbd> move</span><span><kbd>⏎</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="help-mask" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+  <div class="help"><h2>keys</h2><dl><dt><kbd>/</kbd></dt><dd>search</dd><dt><kbd>j / k</kbd></dt><dd>move / scroll</dd><dt><kbd>enter</kbd></dt><dd>open</dd><dt><kbd>g g / G</kbd></dt><dd>top / bottom</dd><dt><kbd>t</kbd></dt><dd>toggle light</dd><dt><kbd>?</kbd></dt><dd>this help</dd><dt><kbd>esc</kbd></dt><dd>close</dd></dl></div>
+</div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

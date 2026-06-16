@@ -33,12 +33,16 @@
   <url><loc>https://algoatson.github.io/p/srop-one-syscall-every-register/</loc><lastmod>2026-05-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/checksec-everything/</loc><lastmod>2026-05-19</lastmod></url>
   <url><loc>https://algoatson.github.io/p/writeup-notekeeper-uaf/</loc><lastmod>2026-05-18</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/brop-blind-rop/</loc><lastmod>2026-05-14</lastmod></url>
   <url><loc>https://algoatson.github.io/p/finding-gadgets/</loc><lastmod>2026-05-12</lastmod></url>
   <url><loc>https://algoatson.github.io/p/ret2dlresolve-no-leak/</loc><lastmod>2026-05-10</lastmod></url>
   <url><loc>https://algoatson.github.io/p/pwndbg-muscle-memory/</loc><lastmod>2026-05-01</lastmod></url>
   <url><loc>https://algoatson.github.io/p/seccomp-jails-and-their-holes/</loc><lastmod>2026-04-30</lastmod></url>
   <url><loc>https://algoatson.github.io/p/first-five-minutes-unknown-binary/</loc><lastmod>2026-04-22</lastmod></url>
   <url><loc>https://algoatson.github.io/p/userfaultfd-fuse-race-windows/</loc><lastmod>2026-04-20</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/dirtycred-swapping-credentials/</loc><lastmod>2026-04-18</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/cross-cache-attacks/</loc><lastmod>2026-04-16</lastmod></url>
+  <url><loc>https://algoatson.github.io/p/kernel-heap-spray-primitives/</loc><lastmod>2026-04-14</lastmod></url>
   <url><loc>https://algoatson.github.io/p/kernel-lpe-commit-creds/</loc><lastmod>2026-04-12</lastmod></url>
   <url><loc>https://algoatson.github.io/p/anti-debug-bingo/</loc><lastmod>2026-04-09</lastmod></url>
   <url><loc>https://algoatson.github.io/p/cpp-vtable-hijacking-type-confusion/</loc><lastmod>2026-04-05</lastmod></url>
