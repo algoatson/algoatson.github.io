@@ -146,9 +146,9 @@ so <code class="highlight">sub … ; jne</code> sees no change and the check pas
 <summary>2 — brute force it on a fork server</summary>
 <p>Because <code class="highlight">fork()</code> children inherit the parent's canary, you can recover it a
 byte at a time: overwrite one canary byte and see whether the child crashes
-(wrong) or runs on (right). The low byte is already known to be <code class="highlight">0x00</code>, so:
-$$ \text{attempts} \le 256 \times 7 = 1792 $$
-versus the <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mn>2</mn><mrow><mn>56</mn></mrow></msup></mrow></math></span> of guessing blind. Same trick recovers the saved return
+(wrong) or runs on (right). The low byte is already known to be <code class="highlight">0x00</code>, so it's
+at most <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mn>256</mn><mo>&#x000D7;</mo><mn>7</mn><mo>&#x0003D;</mo><mn>1792</mn></mrow></math></span> attempts — versus the <span class="math"><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mn>2</mn><mrow><mn>56</mn></mrow></msup></mrow></math></span> of guessing blind.
+Same trick recovers the saved return
 address / PIE base byte-by-byte afterward.</p>
 </details>
 <details class="spoiler">

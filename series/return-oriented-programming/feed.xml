@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/series/return-oriented-programming/feed.xml" rel="self" type="application/rss+xml"/>
     <description>A remote service with a stack overflow, that forks per connection, and that you have no binary for. Blind ROP turns the only feedback you have — does the connection crash or not — into an oracle, and reads the canary, finds gadgets, and dumps the binary over the socket. The most elegant trick in the ROP toolkit.</description>
     <language>en</language>
-    <lastBuildDate>Tue, 16 Jun 2026 02:38:36 +0000</lastBuildDate>
+    <lastBuildDate>Tue, 16 Jun 2026 02:47:52 +0000</lastBuildDate>
     <item>
       <title>ret2libc on a warm-up: stack smash to shell</title>
       <link>https://algoatson.github.io/p/ret2libc-warmup/</link>

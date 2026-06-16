@@ -6,7 +6,7 @@
     <atom:link href="https://algoatson.github.io/series/crypto-attacks/feed.xml" rel="self" type="application/rss+xml"/>
     <description>The signing oracle reused a nonce across two messages. That&#x27;s the whole vulnerability — and it collapses the private key to a couple of modular divisions. The algebra, then the generalisation to merely *biased* nonces and a lattice.</description>
     <language>en</language>
-    <lastBuildDate>Tue, 16 Jun 2026 02:38:36 +0000</lastBuildDate>
+    <lastBuildDate>Tue, 16 Jun 2026 02:47:52 +0000</lastBuildDate>
     <item>
       <title>the CBC padding oracle — decrypting without the key</title>
       <link>https://algoatson.github.io/p/cbc-padding-oracle/</link>
